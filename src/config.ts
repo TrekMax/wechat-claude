@@ -1,7 +1,18 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export type BridgeMode = "api" | "acp";
+
+export interface AgentConfig {
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+  showThoughts: boolean;
+}
+
 export interface WeChatClaudeConfig {
+  mode: BridgeMode;
   wechat: {
     baseUrl: string;
     cdnBaseUrl: string;
@@ -14,6 +25,7 @@ export interface WeChatClaudeConfig {
     systemPrompt: string;
     temperature?: number;
   };
+  agent: AgentConfig;
   session: {
     idleTimeoutMs: number;
     maxConcurrentUsers: number;
@@ -29,9 +41,7 @@ type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
 };
 
-const DEFAULTS: Omit<WeChatClaudeConfig, "claude"> & {
-  claude: Omit<WeChatClaudeConfig["claude"], "apiKey">;
-} = {
+const DEFAULTS = {
   wechat: {
     baseUrl: "https://ilinkai.weixin.qq.com",
     cdnBaseUrl: "https://novac2c.cdn.weixin.qq.com/c2c",
@@ -42,6 +52,12 @@ const DEFAULTS: Omit<WeChatClaudeConfig, "claude"> & {
     maxTokens: 4096,
     systemPrompt:
       "You are a helpful assistant communicating through WeChat. Keep responses concise and clear. Respond in the same language the user uses.",
+  },
+  agent: {
+    command: "",
+    args: [] as string[],
+    cwd: process.cwd(),
+    showThoughts: false,
   },
   session: {
     idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -57,16 +73,21 @@ const DEFAULTS: Omit<WeChatClaudeConfig, "claude"> & {
 export function loadConfig(
   overrides?: DeepPartial<WeChatClaudeConfig>
 ): WeChatClaudeConfig {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const env = process.env;
+
+  // Determine mode: if agent override is provided, use acp mode
+  const mode: BridgeMode = overrides?.mode ?? "api";
+
+  // API key is only required in api mode
+  const apiKey = env.ANTHROPIC_API_KEY ?? "";
+  if (mode === "api" && !apiKey) {
     throw new Error(
-      "ANTHROPIC_API_KEY environment variable is required. Set it in your shell or .env file."
+      "ANTHROPIC_API_KEY environment variable is required in API mode. Set it in your shell or .env file."
     );
   }
 
-  const env = process.env;
-
   const config: WeChatClaudeConfig = {
+    mode,
     wechat: {
       baseUrl: env.WEIXIN_BASE_URL || DEFAULTS.wechat.baseUrl,
       cdnBaseUrl: env.WEIXIN_CDN_BASE_URL || DEFAULTS.wechat.cdnBaseUrl,
@@ -82,6 +103,12 @@ export function loadConfig(
       temperature: env.CLAUDE_TEMPERATURE
         ? parseFloat(env.CLAUDE_TEMPERATURE)
         : undefined,
+    },
+    agent: {
+      command: DEFAULTS.agent.command,
+      args: [...DEFAULTS.agent.args],
+      cwd: DEFAULTS.agent.cwd,
+      showThoughts: false,
     },
     session: {
       idleTimeoutMs: env.SESSION_IDLE_TIMEOUT_HOURS
@@ -100,18 +127,12 @@ export function loadConfig(
 
   // Apply overrides
   if (overrides) {
-    if (overrides.claude) {
-      Object.assign(config.claude, overrides.claude);
-    }
-    if (overrides.wechat) {
-      Object.assign(config.wechat, overrides.wechat);
-    }
-    if (overrides.session) {
-      Object.assign(config.session, overrides.session);
-    }
-    if (overrides.storage) {
-      Object.assign(config.storage, overrides.storage);
-    }
+    if (overrides.mode) config.mode = overrides.mode;
+    if (overrides.claude) Object.assign(config.claude, overrides.claude);
+    if (overrides.wechat) Object.assign(config.wechat, overrides.wechat);
+    if (overrides.agent) Object.assign(config.agent, overrides.agent);
+    if (overrides.session) Object.assign(config.session, overrides.session);
+    if (overrides.storage) Object.assign(config.storage, overrides.storage);
   }
 
   return config;

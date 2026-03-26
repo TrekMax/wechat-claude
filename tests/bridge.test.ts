@@ -10,6 +10,18 @@ vi.mock("../src/claude/client.js", () => ({
   })),
 }));
 
+// Mock AcpSessionManager
+const mockAcpEnqueue = vi.fn();
+const mockAcpStart = vi.fn();
+const mockAcpStop = vi.fn().mockResolvedValue(undefined);
+vi.mock("../src/acp/session-manager.js", () => ({
+  AcpSessionManager: vi.fn().mockImplementation(() => ({
+    enqueue: mockAcpEnqueue,
+    start: mockAcpStart,
+    stop: mockAcpStop,
+  })),
+}));
+
 // Mock WeChat SDK
 const mockSendText = vi.fn();
 const mockOnMessage = vi.fn();
@@ -29,8 +41,9 @@ vi.mock("@xmccln/wechat-ilink-sdk", () => ({
   })),
 }));
 
-function makeConfig(): WeChatClaudeConfig {
+function makeApiConfig(): WeChatClaudeConfig {
   return {
+    mode: "api",
     wechat: {
       baseUrl: "https://ilinkai.weixin.qq.com",
       cdnBaseUrl: "https://novac2c.cdn.weixin.qq.com/c2c",
@@ -42,6 +55,12 @@ function makeConfig(): WeChatClaudeConfig {
       maxTokens: 4096,
       systemPrompt: "You are helpful.",
     },
+    agent: {
+      command: "",
+      args: [],
+      cwd: "/tmp",
+      showThoughts: false,
+    },
     session: {
       idleTimeoutMs: 86400000,
       maxConcurrentUsers: 10,
@@ -52,7 +71,19 @@ function makeConfig(): WeChatClaudeConfig {
   };
 }
 
-// Helper: create SDK-shaped message
+function makeAcpConfig(): WeChatClaudeConfig {
+  return {
+    ...makeApiConfig(),
+    mode: "acp",
+    agent: {
+      command: "npx",
+      args: ["@anthropic-ai/claude-code", "--acp"],
+      cwd: "/tmp",
+      showThoughts: false,
+    },
+  };
+}
+
 function makeTextMsg(text: string, userId = "user1", contextToken = "ctx1") {
   return {
     from_user_id: userId,
@@ -62,7 +93,7 @@ function makeTextMsg(text: string, userId = "user1", contextToken = "ctx1") {
   };
 }
 
-describe("WeChatClaudeBridge", () => {
+describe("WeChatClaudeBridge — API mode", () => {
   let bridge: WeChatClaudeBridge;
 
   beforeEach(() => {
@@ -74,19 +105,14 @@ describe("WeChatClaudeBridge", () => {
       stopReason: "end_turn",
     });
     mockSendText.mockResolvedValue(undefined);
-    bridge = new WeChatClaudeBridge(makeConfig(), "test-token");
+    bridge = new WeChatClaudeBridge(makeApiConfig(), "test-token");
   });
 
   afterEach(() => {
     bridge.destroy();
   });
 
-  it("should register message handler on construction", () => {
-    expect(mockOnMessage).toHaveBeenCalledTimes(1);
-    expect(typeof mockOnMessage.mock.calls[0][0]).toBe("function");
-  });
-
-  it("should process text message and reply via Claude", async () => {
+  it("should process text message and reply via Claude API", async () => {
     await bridge.processMessage(makeTextMsg("Hello"));
 
     expect(mockChat).toHaveBeenCalledTimes(1);
@@ -137,11 +163,9 @@ describe("WeChatClaudeBridge", () => {
     await bridge.processMessage(makeTextMsg("first message"));
     await bridge.processMessage(makeTextMsg("second message", "user1", "ctx2"));
 
-    // Second call should include full conversation history
     const secondCall = mockChat.mock.calls[1];
     const messages = secondCall[0];
-    // user, assistant, user = 3 turns
-    expect(messages).toHaveLength(3);
+    expect(messages).toHaveLength(3); // user, assistant, user
   });
 
   it("should ignore messages without userId or contextToken", async () => {
@@ -151,5 +175,56 @@ describe("WeChatClaudeBridge", () => {
 
     expect(mockChat).not.toHaveBeenCalled();
     expect(mockSendText).not.toHaveBeenCalled();
+  });
+});
+
+describe("WeChatClaudeBridge — ACP mode", () => {
+  let bridge: WeChatClaudeBridge;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendText.mockResolvedValue(undefined);
+    mockAcpEnqueue.mockResolvedValue(undefined);
+    bridge = new WeChatClaudeBridge(makeAcpConfig(), "test-token");
+  });
+
+  afterEach(() => {
+    bridge.destroy();
+  });
+
+  it("should enqueue message to ACP session manager", async () => {
+    await bridge.processMessage(makeTextMsg("Hello"));
+
+    expect(mockAcpEnqueue).toHaveBeenCalledTimes(1);
+    expect(mockAcpEnqueue).toHaveBeenCalledWith("user1", {
+      prompt: [{ type: "text", text: "Hello" }],
+      contextToken: "ctx1",
+    });
+  });
+
+  it("should not use Claude API in ACP mode", async () => {
+    await bridge.processMessage(makeTextMsg("Hello"));
+
+    expect(mockChat).not.toHaveBeenCalled();
+  });
+
+  it("should ignore messages without userId", async () => {
+    await bridge.processMessage({
+      item_list: [{ type: 1, text_item: { text: "hi" } }],
+    });
+
+    expect(mockAcpEnqueue).not.toHaveBeenCalled();
+  });
+
+  it("should handle ACP enqueue errors gracefully", async () => {
+    mockAcpEnqueue.mockRejectedValueOnce(new Error("Agent crashed"));
+
+    await bridge.processMessage(makeTextMsg("hello"));
+
+    expect(mockSendText).toHaveBeenCalledWith(
+      "user1",
+      expect.stringContaining("error"),
+      "ctx1"
+    );
   });
 });

@@ -6,7 +6,11 @@ import {
 import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
 import { ClaudeClient } from "./claude/client.js";
 import { SessionManager } from "./session/manager.js";
-import { convertToClaudeContent } from "./adapter/inbound.js";
+import { AcpSessionManager } from "./acp/session-manager.js";
+import {
+  convertToClaudeContent,
+  type ClaudeContentBlock,
+} from "./adapter/inbound.js";
 import { formatForWeChat, splitText } from "./adapter/outbound.js";
 import type { WeChatClaudeConfig } from "./config.js";
 
@@ -14,10 +18,15 @@ const WECHAT_MAX_MESSAGE_LENGTH = 4000;
 
 export class WeChatClaudeBridge {
   private sdk: WeixinSDK;
-  private claude: ClaudeClient;
-  private sessions: SessionManager;
   private config: WeChatClaudeConfig;
   private mediaDownloader: MediaDownloader;
+
+  // API mode
+  private claude?: ClaudeClient;
+  private sessions?: SessionManager;
+
+  // ACP mode
+  private acpSessions?: AcpSessionManager;
 
   constructor(config: WeChatClaudeConfig, token: string) {
     this.config = config;
@@ -31,21 +40,38 @@ export class WeChatClaudeBridge {
       auth: authProvider,
     });
 
-    this.claude = new ClaudeClient({
-      apiKey: config.claude.apiKey,
-      model: config.claude.model,
-      maxTokens: config.claude.maxTokens,
-      temperature: config.claude.temperature,
-    });
-
-    this.sessions = new SessionManager({
-      maxConcurrentUsers: config.session.maxConcurrentUsers,
-      maxConversationTurns: config.session.maxConversationTurns,
-      idleTimeoutMs: config.session.idleTimeoutMs,
-      resetKeywords: config.session.resetKeywords,
-    });
-
     this.mediaDownloader = new MediaDownloader(config.wechat.cdnBaseUrl);
+
+    if (config.mode === "api") {
+      this.claude = new ClaudeClient({
+        apiKey: config.claude.apiKey,
+        model: config.claude.model,
+        maxTokens: config.claude.maxTokens,
+        temperature: config.claude.temperature,
+      });
+
+      this.sessions = new SessionManager({
+        maxConcurrentUsers: config.session.maxConcurrentUsers,
+        maxConversationTurns: config.session.maxConversationTurns,
+        idleTimeoutMs: config.session.idleTimeoutMs,
+        resetKeywords: config.session.resetKeywords,
+      });
+    } else {
+      this.acpSessions = new AcpSessionManager({
+        agentCommand: config.agent.command,
+        agentArgs: config.agent.args,
+        agentCwd: config.agent.cwd,
+        agentEnv: config.agent.env,
+        idleTimeoutMs: config.session.idleTimeoutMs,
+        maxConcurrentUsers: config.session.maxConcurrentUsers,
+        showThoughts: config.agent.showThoughts,
+        onReply: (userId, contextToken, text) =>
+          this.sendReply(userId, contextToken, text),
+        sendTyping: async () => {
+          // typing is best-effort, no-op for now
+        },
+      });
+    }
 
     this.sdk.onMessage((msg: WeixinMessage) => {
       this.processMessage(msg);
@@ -53,29 +79,46 @@ export class WeChatClaudeBridge {
   }
 
   async start(): Promise<void> {
+    if (this.acpSessions) {
+      this.acpSessions.start();
+    }
     await this.sdk.start();
-    console.log("[bridge] Started listening for WeChat messages");
+    console.log(
+      `[bridge] Started in ${this.config.mode.toUpperCase()} mode, listening for WeChat messages`
+    );
   }
 
   destroy(): void {
-    this.sessions.destroy();
+    this.sessions?.destroy();
+    if (this.acpSessions) {
+      this.acpSessions.stop().catch(() => {});
+    }
     this.sdk.stop();
   }
 
   /** Process a single WeChat message. Public for testability. */
   async processMessage(msg: WeixinMessage): Promise<void> {
+    if (this.config.mode === "api") {
+      await this.processApiMessage(msg);
+    } else {
+      await this.processAcpMessage(msg);
+    }
+  }
+
+  // -- API mode --
+
+  private async processApiMessage(msg: WeixinMessage): Promise<void> {
     const userId = msg.from_user_id;
     const contextToken = msg.context_token;
-
     if (!userId || !contextToken) return;
 
     try {
-      // Check for reset command — look at first text item
+      // Check for reset command
       const firstTextItem = msg.item_list?.find((item) => item.type === 1);
       if (firstTextItem?.text_item?.text) {
         const text = firstTextItem.text_item.text.trim();
-        if (this.sessions.isResetCommand(text)) {
-          this.sessions.resetSession(userId);
+        if (this.sessions!.isResetCommand(text)) {
+          this.sessions!.resetSession(userId);
           await this.sdk.sendText(
             userId,
             "Conversation has been reset. Send me a new message to start fresh.",
@@ -85,7 +128,6 @@ export class WeChatClaudeBridge {
         }
       }
 
-      // Convert WeChat message to Claude content blocks
       const downloadImage = async (message: WeixinMessage) => {
         const result = await this.mediaDownloader.downloadImage(message);
         if (!result) return null;
@@ -96,30 +138,17 @@ export class WeChatClaudeBridge {
       };
 
       const contentBlocks = await convertToClaudeContent(msg, downloadImage);
-
-      // Get or create session
-      const session = this.sessions.getOrCreateSession(userId);
-
-      // Add user message to conversation
+      const session = this.sessions!.getOrCreateSession(userId);
       session.conversation.addUserMessage(contentBlocks);
 
-      // Call Claude API
       const history = session.conversation.getHistory();
-      const response = await this.claude.chat(
+      const response = await this.claude!.chat(
         history,
         this.config.claude.systemPrompt
       );
 
-      // Add assistant response to conversation
       session.conversation.addAssistantMessage(response.text);
-
-      // Format and send response
-      const formatted = formatForWeChat(response.text);
-      const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
-
-      for (const chunk of chunks) {
-        await this.sdk.sendText(userId, chunk, contextToken);
-      }
+      await this.sendReply(userId, contextToken, response.text);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
@@ -127,16 +156,85 @@ export class WeChatClaudeBridge {
         `[bridge] Error processing message from ${userId}:`,
         errorMessage
       );
-
       try {
         await this.sdk.sendText(
           userId,
-          `Sorry, an error occurred while processing your message. Please try again later.\n\n[error: ${errorMessage}]`,
+          `Sorry, an error occurred. Please try again later.\n\n[error: ${errorMessage}]`,
           contextToken
         );
       } catch {
         console.error(`[bridge] Failed to send error message to ${userId}`);
       }
+    }
+  }
+
+  // -- ACP mode --
+
+  private async processAcpMessage(msg: WeixinMessage): Promise<void> {
+    const userId = msg.from_user_id;
+    const contextToken = msg.context_token;
+    if (!userId || !contextToken) return;
+
+    try {
+      // Convert to ACP content blocks
+      const downloadImage = async (message: WeixinMessage) => {
+        const result = await this.mediaDownloader.downloadImage(message);
+        if (!result) return null;
+        const { readFileSync } = await import("node:fs");
+        const buffer = readFileSync(result.path);
+        await result.cleanup();
+        return { buffer, mimeType: result.mimeType };
+      };
+
+      const claudeBlocks = await convertToClaudeContent(msg, downloadImage);
+
+      // Convert ClaudeContentBlock[] to ACP ContentBlock[]
+      const acpBlocks = claudeBlocks.map((block: ClaudeContentBlock) => {
+        if (block.type === "text") {
+          return { type: "text" as const, text: block.text };
+        }
+        // Image: ACP uses { type: "image", data, mimeType }
+        return {
+          type: "image" as const,
+          data: block.source.data,
+          mimeType: block.source.media_type,
+        };
+      });
+
+      await this.acpSessions!.enqueue(userId, {
+        prompt: acpBlocks,
+        contextToken,
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error(
+        `[bridge] Error processing ACP message from ${userId}:`,
+        errorMessage
+      );
+      try {
+        await this.sdk.sendText(
+          userId,
+          `Sorry, an error occurred. Please try again later.\n\n[error: ${errorMessage}]`,
+          contextToken
+        );
+      } catch {
+        console.error(`[bridge] Failed to send error message to ${userId}`);
+      }
+    }
+  }
+
+  // -- Shared --
+
+  private async sendReply(
+    userId: string,
+    contextToken: string,
+    text: string
+  ): Promise<void> {
+    const formatted = formatForWeChat(text);
+    const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
+    for (const chunk of chunks) {
+      await this.sdk.sendText(userId, chunk, contextToken);
     }
   }
 }

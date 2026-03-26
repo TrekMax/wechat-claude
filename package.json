@@ -16,12 +16,19 @@
     "start": "node dist/bin/wechat-claude.js",
     "dev": "tsx bin/wechat-claude.ts"
   },
-  "keywords": ["wechat", "claude", "anthropic", "chatbot", "ilink"],
+  "keywords": [
+    "wechat",
+    "claude",
+    "anthropic",
+    "chatbot",
+    "ilink"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.17.0",
     "@anthropic-ai/sdk": "^0.39.0",
     "@xmccln/wechat-ilink-sdk": "^1.0.2",
     "qrcode-terminal": "^0.12.0"

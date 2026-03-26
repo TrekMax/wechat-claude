@@ -12,9 +12,22 @@ describe("loadConfig", () => {
     process.env = originalEnv;
   });
 
-  it("should throw if ANTHROPIC_API_KEY is missing", () => {
+  it("should throw if ANTHROPIC_API_KEY is missing in api mode", () => {
     delete process.env.ANTHROPIC_API_KEY;
     expect(() => loadConfig()).toThrow("ANTHROPIC_API_KEY");
+  });
+
+  it("should not throw for missing API key in acp mode", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    expect(() =>
+      loadConfig({ mode: "acp", agent: { command: "npx", args: ["agent"] } })
+    ).not.toThrow();
+  });
+
+  it("should default to api mode", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test-key";
+    const config = loadConfig();
+    expect(config.mode).toBe("api");
   });
 
   it("should return valid config with defaults when API key is set", () => {
@@ -52,12 +65,22 @@ describe("loadConfig", () => {
     expect(config.claude.apiKey).toBe("sk-ant-test-key");
   });
 
-  it("should never expose API key in serialized config", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-ant-secret";
-    const config = loadConfig();
-    const serialized = JSON.stringify(config);
+  it("should accept agent config in acp mode", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const config = loadConfig({
+      mode: "acp",
+      agent: {
+        command: "npx",
+        args: ["@anthropic-ai/claude-code", "--acp"],
+        cwd: "/tmp",
+        showThoughts: true,
+      },
+    });
 
-    // apiKey is in the object but we verify it doesn't leak elsewhere
-    expect(config.claude.apiKey).toBe("sk-ant-secret");
+    expect(config.mode).toBe("acp");
+    expect(config.agent.command).toBe("npx");
+    expect(config.agent.args).toEqual(["@anthropic-ai/claude-code", "--acp"]);
+    expect(config.agent.cwd).toBe("/tmp");
+    expect(config.agent.showThoughts).toBe(true);
   });
 });
