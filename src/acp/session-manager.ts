@@ -6,6 +6,8 @@
  * Based on wechat-acp/src/acp/session.ts
  */
 
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { AcpClient } from "./client.js";
 import {
@@ -131,21 +133,47 @@ export class AcpSessionManager {
     return newValue;
   }
 
-  /** Get current model for this manager */
+  /** Get current model from project settings */
   getModel(): string {
-    return this.opts.agentEnv?.CLAUDE_CODE_USE_MODEL || "default";
+    const settingsPath = join(this.opts.agentCwd, ".claude", "settings.json");
+    try {
+      if (existsSync(settingsPath)) {
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+        if (settings.model) return settings.model;
+      }
+    } catch {
+      // ignore
+    }
+    return "default";
   }
 
-  /** Switch model — kills existing session so next message spawns with new model */
+  /** Switch model — writes to .claude/settings.json and restarts session */
   setModel(userId: string, model: string): void {
-    this.opts.agentEnv = { ...this.opts.agentEnv, CLAUDE_CODE_USE_MODEL: model };
+    const claudeDir = join(this.opts.agentCwd, ".claude");
+    const settingsPath = join(claudeDir, "settings.json");
+
+    // Read existing settings
+    let settings: Record<string, unknown> = {};
+    try {
+      if (existsSync(settingsPath)) {
+        settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      }
+    } catch {
+      // start fresh
+    }
+
+    // Update model
+    settings.model = model;
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    this.opts.log(`Model set to "${model}" in ${settingsPath}`);
 
     // Kill existing session so it restarts with new model
     const session = this.sessions.get(userId);
     if (session) {
       killAgent(session.agentInfo.process);
       this.sessions.delete(userId);
-      this.opts.log(`Session for ${userId} killed for model switch to ${model}`);
+      this.opts.log(`Session for ${userId} killed for model switch`);
     }
   }
 

@@ -109,9 +109,21 @@ try {
     config.agent.showThoughts = flags.showThoughts;
     config.agent.env = { ...resolved.env };
 
-    // Pass --model to ACP agent if specified
+    // Write --model to .claude/settings.json if specified
     if (flags.model) {
-      config.agent.env.CLAUDE_CODE_USE_MODEL = flags.model;
+      const { mkdirSync: mkDir, existsSync: exists, readFileSync: readF, writeFileSync: writeF } = await import("node:fs");
+      const { join: joinPath } = await import("node:path");
+      const claudeDir = joinPath(config.agent.cwd, ".claude");
+      const settingsPath = joinPath(claudeDir, "settings.json");
+      let settings: Record<string, unknown> = {};
+      try {
+        if (exists(settingsPath)) {
+          settings = JSON.parse(readF(settingsPath, "utf-8"));
+        }
+      } catch { /* start fresh */ }
+      settings.model = flags.model;
+      mkDir(claudeDir, { recursive: true });
+      writeF(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
     }
   }
 } catch (error) {

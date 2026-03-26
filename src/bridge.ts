@@ -250,19 +250,30 @@ export class WeChatClaudeBridge {
 
     // /model [name] — view or switch model
     if (cmd === "/model") {
+      const validModels = ["sonnet", "haiku", "opus",
+        "claude-sonnet-4-20250514", "claude-opus-4-20250514",
+        "claude-haiku-4-5-20251001"];
+      const isViewCmd = !arg || arg === "view" || arg === "info" || arg === "status";
+
       if (this.config.mode === "acp") {
-        if (arg) {
-          this.acpSessions!.setModel(userId, arg);
-          await this.sdk.sendText(
-            userId,
-            `Model switched to: ${arg}\nSession restarted. Send a message to begin.`,
-            contextToken
-          );
-        } else {
+        if (isViewCmd) {
           const current = this.acpSessions!.getModel();
           await this.sdk.sendText(
             userId,
             `Current model: ${current}\n\nSwitch with:\n/model sonnet\n/model haiku\n/model opus`,
+            contextToken
+          );
+        } else if (validModels.some(m => m === arg || m.includes(arg!))) {
+          this.acpSessions!.setModel(userId, arg!);
+          await this.sdk.sendText(
+            userId,
+            `Model switched to: ${arg}\nSession will restart on next message.`,
+            contextToken
+          );
+        } else {
+          await this.sdk.sendText(
+            userId,
+            `Unknown model: ${arg}\n\nAvailable: sonnet, haiku, opus`,
             contextToken
           );
         }
