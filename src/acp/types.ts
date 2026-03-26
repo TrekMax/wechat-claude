@@ -10,7 +10,7 @@ export const BUILT_IN_AGENTS: Record<string, AgentPreset> = {
   claude: {
     label: "Claude Code",
     command: "npx",
-    args: ["@anthropic-ai/claude-code", "--acp"],
+    args: ["@zed-industries/claude-code-acp"],
     description: "Claude Code via ACP",
   },
   copilot: {
