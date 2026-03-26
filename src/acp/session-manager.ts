@@ -108,6 +108,20 @@ export class AcpSessionManager {
     return this.sessions.size;
   }
 
+  hasSession(userId: string): boolean {
+    return this.sessions.has(userId);
+  }
+
+  /** Kill and remove user's session — next message will create a fresh one */
+  resetSession(userId: string): void {
+    const session = this.sessions.get(userId);
+    if (session) {
+      killAgent(session.agentInfo.process);
+      this.sessions.delete(userId);
+      this.opts.log(`Session for ${userId} reset`);
+    }
+  }
+
   /** Toggle showThoughts for a specific user's session */
   toggleShowThoughts(userId: string): boolean {
     const session = this.sessions.get(userId);

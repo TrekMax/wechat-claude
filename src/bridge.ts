@@ -276,6 +276,48 @@ export class WeChatClaudeBridge {
       return true;
     }
 
+    // /new — reset session (both modes)
+    if (cmd === "/new" || cmd === "/reset" || cmd === "/clear") {
+      if (this.config.mode === "acp") {
+        this.acpSessions!.resetSession(userId);
+        await this.sdk.sendText(
+          userId,
+          "Session reset. Next message will start a new agent.",
+          contextToken
+        );
+      } else {
+        this.sessions!.resetSession(userId);
+        await this.sdk.sendText(
+          userId,
+          "Conversation has been reset.",
+          contextToken
+        );
+      }
+      return true;
+    }
+
+    // /status — show session info
+    if (cmd === "/status") {
+      if (this.config.mode === "acp") {
+        const model = this.acpSessions!.getModel();
+        const hasSession = this.acpSessions!.hasSession(userId);
+        const lines = [
+          `Mode: ACP`,
+          `Model: ${model}`,
+          `Session: ${hasSession ? "active (reusing)" : "none (will create on next message)"}`,
+          `Debug: ${this.debug ? "ON" : "OFF"}`,
+        ];
+        await this.sdk.sendText(userId, lines.join("\n"), contextToken);
+      } else {
+        await this.sdk.sendText(
+          userId,
+          `Mode: API\nModel: ${this.config.claude.model}\nDebug: ${this.debug ? "ON" : "OFF"}`,
+          contextToken
+        );
+      }
+      return true;
+    }
+
     // ACP-only commands
     if (this.config.mode === "acp") {
       if (cmd === "/show-thoughts" || cmd === "/thoughts") {
@@ -289,31 +331,17 @@ export class WeChatClaudeBridge {
       }
     }
 
-    // API-only commands
-    if (this.config.mode === "api") {
-      if (this.sessions!.isResetCommand(lower)) {
-        this.sessions!.resetSession(userId);
-        await this.sdk.sendText(
-          userId,
-          "Conversation has been reset.",
-          contextToken
-        );
-        return true;
-      }
-    }
-
     // /help
     if (cmd === "/help") {
       const lines = ["Commands:"];
+      lines.push("/new — Start fresh session");
+      lines.push("/model [name] — View/switch model");
+      lines.push("/status — Show session info");
       if (this.config.mode === "acp") {
-        lines.push("/show-thoughts — Toggle thinking visibility");
+        lines.push("/show-thoughts — Toggle thinking");
       }
-      if (this.config.mode === "api") {
-        lines.push("/reset — Clear conversation history");
-      }
-      lines.push("/model [name] — View/switch model (sonnet/haiku/opus)");
-      lines.push("/debug [on|off] — Toggle debug mode");
-      lines.push("/help — Show this message");
+      lines.push("/debug [on|off] — Toggle debug");
+      lines.push("/help — This message");
       await this.sdk.sendText(userId, lines.join("\n"), contextToken);
       return true;
     }
