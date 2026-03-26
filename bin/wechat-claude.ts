@@ -113,16 +113,18 @@ try {
 
 // -- QR rendering helper -----------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let renderQr: ((url: string) => void) | null = null;
 try {
-  const mod = await import("qrcode-terminal");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const generate = (mod as any).default?.generate ?? (mod as any).generate;
-  if (typeof generate === "function") {
+  const mod = await import("qrcode-terminal") as any;
+  const qr = mod.default ?? mod;
+  if (typeof qr.setErrorLevel === "function") {
+    qr.setErrorLevel("L");
+  }
+  if (typeof qr.generate === "function") {
     renderQr = (url: string) => {
-      generate(url, { small: true }, (qr: string) => {
-        console.log(qr);
+      qr.generate(url, { small: true }, (output: string) => {
+        console.log(output);
       });
     };
   }
