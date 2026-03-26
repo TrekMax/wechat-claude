@@ -120,12 +120,12 @@ describe("AcpClient", () => {
     await client.sessionUpdate({
       update: {
         sessionUpdate: "tool_call",
-        toolName: "Read",
-        input: { file_path: "/src/main.ts" },
+        title: "Read src/main.ts",
+        status: "running",
       },
     } as never);
 
-    expect(onToolProgress).toHaveBeenCalledWith("[Reading: /src/main.ts]");
+    expect(onToolProgress).toHaveBeenCalledWith("[Read src/main.ts]");
   });
 
   it("should accumulate thought chunks when showThoughts enabled", async () => {
