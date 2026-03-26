@@ -246,6 +246,7 @@ export class AcpSessionManager {
 
           // Send ACP prompt
           this.opts.log(`[${session.userId}] Sending prompt to agent...`);
+          const promptStart = Date.now();
           const result = await session.agentInfo.connection.prompt({
             sessionId: session.agentInfo.sessionId,
             prompt: pending.prompt,
@@ -260,8 +261,9 @@ export class AcpSessionManager {
             replyText += "\n[agent refused to continue]";
           }
 
+          const promptMs = Date.now() - promptStart;
           this.opts.log(
-            `[${session.userId}] Agent done (${result.stopReason}), reply ${replyText.length} chars`
+            `[${session.userId}] Agent done (${result.stopReason}) in ${promptMs}ms, reply ${replyText.length} chars`
           );
 
           if (replyText.trim()) {

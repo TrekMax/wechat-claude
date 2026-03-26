@@ -56,6 +56,7 @@ export class WeChatClaudeBridge {
       config: {
         baseUrl: config.wechat.baseUrl,
         cdnBaseUrl: config.wechat.cdnBaseUrl,
+        pollingInterval: 100, // Minimize delay between long-poll cycles
       },
       auth: authProvider,
     });
@@ -121,6 +122,12 @@ export class WeChatClaudeBridge {
       if (msg.message_type === 2) return;
       // Skip incomplete messages (state 1 = GENERATING)
       if (msg.message_state === 1) return;
+
+      // Log timing: how long from WeChat send to bridge receive
+      if (msg.create_time_ms) {
+        const delay = Date.now() - msg.create_time_ms;
+        log("bridge", `Message from ${msg.from_user_id ?? "?"} (poll delay: ${delay}ms)`);
+      }
 
       this.processMessage(msg).catch((err) => {
         logError("bridge", `Error in processMessage: ${err}`);
