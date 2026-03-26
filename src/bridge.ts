@@ -20,6 +20,7 @@ export class WeChatClaudeBridge {
   private sdk: WeixinSDK;
   private config: WeChatClaudeConfig;
   private mediaDownloader: MediaDownloader;
+  private debug: boolean;
 
   // API mode
   private claude?: ClaudeClient;
@@ -30,6 +31,7 @@ export class WeChatClaudeBridge {
 
   constructor(config: WeChatClaudeConfig, token: string) {
     this.config = config;
+    this.debug = config.debug;
 
     const authProvider = new TokenAuthProvider(token);
     this.sdk = new WeixinSDK({
@@ -75,9 +77,11 @@ export class WeChatClaudeBridge {
     }
 
     this.sdk.onMessage((msg: WeixinMessage) => {
-      console.log(
-        `[bridge] Received message: from=${msg.from_user_id ?? "?"}, msg_type=${msg.message_type}, state=${msg.message_state}, items=${msg.item_list?.length ?? 0}`
-      );
+      if (this.debug) {
+        console.log(`\n[debug] ===== Incoming WeChat Message =====`);
+        console.log(JSON.stringify(msg, null, 2));
+        console.log(`[debug] =====================================\n`);
+      }
 
       // Skip bot's own messages (type 2 = BOT)
       if (msg.message_type === 2) return;
@@ -141,11 +145,24 @@ export class WeChatClaudeBridge {
           return;
         }
 
+        if (textLower === "/debug") {
+          this.debug = !this.debug;
+          await this.sdk.sendText(
+            userId,
+            this.debug
+              ? "Debug mode ON. Messages will be printed to terminal."
+              : "Debug mode OFF.",
+            contextToken
+          );
+          return;
+        }
+
         if (textLower === "/help") {
           await this.sdk.sendText(
             userId,
             "Available commands:\n" +
               "/reset — Clear conversation history\n" +
+              "/debug — Toggle debug mode\n" +
               "/help — Show this help message",
             contextToken
           );
@@ -222,11 +239,24 @@ export class WeChatClaudeBridge {
         return;
       }
 
+      if (text === "/debug") {
+        this.debug = !this.debug;
+        await this.sdk.sendText(
+          userId,
+          this.debug
+            ? "Debug mode ON. Messages will be printed to terminal."
+            : "Debug mode OFF.",
+          contextToken
+        );
+        return;
+      }
+
       if (text === "/help") {
         await this.sdk.sendText(
           userId,
           "Available commands:\n" +
             "/show-thoughts — Toggle agent thinking visibility\n" +
+            "/debug — Toggle debug mode\n" +
             "/help — Show this help message",
           contextToken
         );

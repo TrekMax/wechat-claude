@@ -16,6 +16,7 @@ const flags = {
   maxTokens: getArgValue("--max-tokens"),
   cwd: getArgValue("--cwd"),
   showThoughts: args.includes("--show-thoughts"),
+  debug: args.includes("--debug"),
   help: args.includes("--help") || args.includes("-h"),
 };
 
@@ -43,6 +44,7 @@ Options:
   --agent <name|cmd>   Enable ACP mode with an agent preset or command
   --cwd <path>         Working directory for ACP agent (default: current dir)
   --show-thoughts      Show agent thinking process in chat (ACP mode)
+  --debug              Print all incoming WeChat messages to terminal
   --login              Force re-login (show QR code)
   --model <model>      Claude model to use (API mode, default: claude-sonnet-4-20250514)
   --system-prompt <p>  System prompt for Claude (API mode)
@@ -82,7 +84,7 @@ Commands (in chat):
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 
 const mode: BridgeMode = flags.agent ? "acp" : "api";
-const overrides: DeepPartial<WeChatClaudeConfig> = { mode };
+const overrides: DeepPartial<WeChatClaudeConfig> = { mode, debug: flags.debug };
 
 if (mode === "api") {
   const claudeOverrides: DeepPartial<WeChatClaudeConfig["claude"]> = {};
@@ -172,6 +174,7 @@ async function main() {
     console.log(`CWD: ${config.agent.cwd}`);
     if (config.agent.showThoughts) console.log(`Thoughts: visible`);
   }
+  if (config.debug) console.log(`Debug: ON`);
   console.log("");
 
   const token = await getToken();

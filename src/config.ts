@@ -13,6 +13,7 @@ export interface AgentConfig {
 
 export interface WeChatClaudeConfig {
   mode: BridgeMode;
+  debug: boolean;
   wechat: {
     baseUrl: string;
     cdnBaseUrl: string;
@@ -88,6 +89,7 @@ export function loadConfig(
 
   const config: WeChatClaudeConfig = {
     mode,
+    debug: false,
     wechat: {
       baseUrl: env.WEIXIN_BASE_URL || DEFAULTS.wechat.baseUrl,
       cdnBaseUrl: env.WEIXIN_CDN_BASE_URL || DEFAULTS.wechat.cdnBaseUrl,
@@ -128,6 +130,7 @@ export function loadConfig(
   // Apply overrides
   if (overrides) {
     if (overrides.mode) config.mode = overrides.mode;
+    if (overrides.debug !== undefined) config.debug = overrides.debug;
     if (overrides.claude) Object.assign(config.claude, overrides.claude);
     if (overrides.wechat) Object.assign(config.wechat, overrides.wechat);
     if (overrides.agent) Object.assign(config.agent, overrides.agent);
