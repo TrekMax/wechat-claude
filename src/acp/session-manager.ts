@@ -99,6 +99,7 @@ export class AcpSessionManager {
     const client = new AcpClient({
       sendTyping: () => this.opts.sendTyping(userId, contextToken),
       onThoughtFlush: (text) => this.opts.onReply(userId, contextToken, text),
+      onToolProgress: (text) => this.opts.onReply(userId, contextToken, text),
       showThoughts: this.opts.showThoughts,
     });
 
@@ -139,6 +140,8 @@ export class AcpSessionManager {
         sendTyping: () =>
           this.opts.sendTyping(session.userId, msg.contextToken),
         onThoughtFlush: (text) =>
+          this.opts.onReply(session.userId, msg.contextToken, text),
+        onToolProgress: (text) =>
           this.opts.onReply(session.userId, msg.contextToken, text),
       });
 

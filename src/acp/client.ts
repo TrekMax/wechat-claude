@@ -10,6 +10,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 export interface AcpClientOpts {
   sendTyping: () => Promise<void>;
   onThoughtFlush: (text: string) => Promise<void>;
+  onToolProgress: (text: string) => Promise<void>;
   showThoughts: boolean;
 }
 
@@ -28,6 +29,7 @@ export class AcpClient implements acp.Client {
   updateCallbacks(callbacks: {
     sendTyping: () => Promise<void>;
     onThoughtFlush: (text: string) => Promise<void>;
+    onToolProgress: (text: string) => Promise<void>;
   }): void {
     this.opts = { ...this.opts, ...callbacks };
   }
@@ -76,9 +78,22 @@ export class AcpClient implements acp.Client {
         break;
       }
 
-      case "tool_call":
+      case "tool_call": {
         await this.maybeFlushThoughts();
+        // Send progress notification for tool calls
+        const toolName = (update as Record<string, unknown>).toolName as string | undefined;
+        const toolInput = (update as Record<string, unknown>).input as Record<string, unknown> | undefined;
+        const progressMsg = this.formatToolProgress(toolName, toolInput);
+        if (progressMsg) {
+          try {
+            await this.opts.onToolProgress(progressMsg);
+          } catch {
+            // best effort
+          }
+        }
+        await this.maybeSendTyping();
         break;
+      }
 
       case "tool_call_update": {
         const status = update.status as string | undefined;
@@ -126,6 +141,32 @@ export class AcpClient implements acp.Client {
     this.chunks = [];
     this.lastTypingAt = 0;
     return text;
+  }
+
+  private formatToolProgress(
+    toolName?: string,
+    toolInput?: Record<string, unknown>
+  ): string | null {
+    if (!toolName) return null;
+
+    switch (toolName) {
+      case "Read":
+        return `[Reading: ${toolInput?.file_path ?? "file"}]`;
+      case "Edit":
+        return `[Editing: ${toolInput?.file_path ?? "file"}]`;
+      case "Write":
+        return `[Writing: ${toolInput?.file_path ?? "file"}]`;
+      case "Bash":
+        return `[Running: ${String(toolInput?.command ?? "command").slice(0, 80)}]`;
+      case "Grep":
+        return `[Searching: ${toolInput?.pattern ?? ""}]`;
+      case "Glob":
+        return `[Finding files: ${toolInput?.pattern ?? ""}]`;
+      case "Agent":
+        return `[Spawning sub-agent]`;
+      default:
+        return `[${toolName}]`;
+    }
   }
 
   private async maybeFlushThoughts(): Promise<void> {

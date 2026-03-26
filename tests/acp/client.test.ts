@@ -6,6 +6,7 @@ describe("AcpClient", () => {
     return new AcpClient({
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush: vi.fn().mockResolvedValue(undefined),
+      onToolProgress: vi.fn().mockResolvedValue(undefined),
       showThoughts: opts?.showThoughts ?? false,
     });
   }
@@ -89,6 +90,7 @@ describe("AcpClient", () => {
     const client = new AcpClient({
       sendTyping,
       onThoughtFlush: vi.fn().mockResolvedValue(undefined),
+      onToolProgress: vi.fn().mockResolvedValue(undefined),
       showThoughts: false,
     });
 
@@ -106,11 +108,32 @@ describe("AcpClient", () => {
     expect(sendTyping).toHaveBeenCalledTimes(1);
   });
 
+  it("should send tool progress notifications", async () => {
+    const onToolProgress = vi.fn().mockResolvedValue(undefined);
+    const client = new AcpClient({
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      onThoughtFlush: vi.fn().mockResolvedValue(undefined),
+      onToolProgress,
+      showThoughts: false,
+    });
+
+    await client.sessionUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolName: "Read",
+        input: { file_path: "/src/main.ts" },
+      },
+    } as never);
+
+    expect(onToolProgress).toHaveBeenCalledWith("[Reading: /src/main.ts]");
+  });
+
   it("should accumulate thought chunks when showThoughts enabled", async () => {
     const onThoughtFlush = vi.fn().mockResolvedValue(undefined);
     const client = new AcpClient({
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush,
+      onToolProgress: vi.fn().mockResolvedValue(undefined),
       showThoughts: true,
     });
 
@@ -132,6 +155,7 @@ describe("AcpClient", () => {
     const onThoughtFlush = vi.fn().mockResolvedValue(undefined);
     const client = new AcpClient({
       sendTyping: vi.fn().mockResolvedValue(undefined),
+      onToolProgress: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush,
       showThoughts: false,
     });
