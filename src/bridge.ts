@@ -74,7 +74,18 @@ export class WeChatClaudeBridge {
     }
 
     this.sdk.onMessage((msg: WeixinMessage) => {
-      this.processMessage(msg);
+      console.log(
+        `[bridge] Received message: from=${msg.from_user_id ?? "?"}, msg_type=${msg.message_type}, state=${msg.message_state}, items=${msg.item_list?.length ?? 0}`
+      );
+
+      // Skip bot's own messages (type 2 = BOT)
+      if (msg.message_type === 2) return;
+      // Skip incomplete messages (state 1 = GENERATING)
+      if (msg.message_state === 1) return;
+
+      this.processMessage(msg).catch((err) => {
+        console.error("[bridge] Error in processMessage:", err);
+      });
     });
   }
 
@@ -173,7 +184,12 @@ export class WeChatClaudeBridge {
   private async processAcpMessage(msg: WeixinMessage): Promise<void> {
     const userId = msg.from_user_id;
     const contextToken = msg.context_token;
-    if (!userId || !contextToken) return;
+    if (!userId || !contextToken) {
+      console.log(`[bridge] Skipping message: no userId or contextToken`);
+      return;
+    }
+
+    console.log(`[bridge] Processing ACP message from ${userId}`);
 
     try {
       // Convert to ACP content blocks
