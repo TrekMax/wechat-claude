@@ -31,6 +31,9 @@ export class WeChatClaudeBridge {
   private apiEndpoints: ApiEndpoints;
   private debug: boolean;
 
+  // Track sent files per user to avoid duplicates within a turn
+  private sentFiles = new Map<string, Set<string>>();
+
   // Typing indicator cache
   private typingTickets = new Map<
     string,
@@ -91,8 +94,13 @@ export class WeChatClaudeBridge {
         maxConcurrentUsers: config.session.maxConcurrentUsers,
         showThoughts: config.agent.showThoughts,
         log: (msg) => log("acp", msg),
-        onReply: (userId, contextToken, text) =>
-          this.sendReply(userId, contextToken, text),
+        onReply: (userId, contextToken, text) => {
+          // Clear sent-files tracking for new final reply
+          this.sentFiles.delete(userId);
+          return this.sendReply(userId, contextToken, text);
+        },
+        onProgress: (userId, contextToken, text) =>
+          this.sendProgressText(userId, contextToken, text),
         onImageReceived: (userId, contextToken, data, mimeType) =>
           this.sendImage(userId, contextToken, data, mimeType),
         sendTyping: (userId, contextToken) =>
@@ -389,6 +397,23 @@ export class WeChatClaudeBridge {
 
   // -- Send helpers --
 
+  /** Send progress/tool/thought text — no image scanning */
+  private async sendProgressText(
+    userId: string,
+    contextToken: string,
+    text: string
+  ): Promise<void> {
+    if (this.debug) {
+      log("debug", `Progress to ${userId}: ${text.slice(0, 100)}`);
+    }
+    const formatted = formatForWeChat(text);
+    const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
+    for (const chunk of chunks) {
+      await this.sdk.sendText(userId, chunk, contextToken);
+    }
+  }
+
+  /** Send final agent reply — with image path detection and deduplication */
   private async sendReply(
     userId: string,
     contextToken: string,
@@ -400,10 +425,17 @@ export class WeChatClaudeBridge {
       log("debug", `===== End reply (${text.length} chars) =====`);
     }
 
-    // Detect local image file paths in the reply and send them
-    const imagePaths = this.extractImagePaths(text);
-    for (const imgPath of imagePaths) {
-      await this.sendLocalFile(userId, contextToken, imgPath);
+    // Detect and send local image/media files (deduplicated)
+    const mediaPaths = this.extractImagePaths(text);
+    if (mediaPaths.length > 0) {
+      const sent = this.sentFiles.get(userId) ?? new Set<string>();
+      for (const filePath of mediaPaths) {
+        if (!sent.has(filePath)) {
+          sent.add(filePath);
+          await this.sendLocalFile(userId, contextToken, filePath);
+        }
+      }
+      this.sentFiles.set(userId, sent);
     }
 
     const formatted = formatForWeChat(text);

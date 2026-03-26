@@ -24,6 +24,8 @@ export interface AcpSessionManagerOpts {
   showThoughts: boolean;
   log: (msg: string) => void;
   onReply: (userId: string, contextToken: string, text: string) => Promise<void>;
+  /** Send text without image scanning (for progress/thoughts) */
+  onProgress: (userId: string, contextToken: string, text: string) => Promise<void>;
   onImageReceived: (userId: string, contextToken: string, data: Buffer, mimeType: string) => Promise<void>;
   sendTyping: (userId: string, contextToken: string) => Promise<void>;
 }
@@ -123,8 +125,8 @@ export class AcpSessionManager {
 
     const client = new AcpClient({
       sendTyping: () => this.opts.sendTyping(userId, contextToken),
-      onThoughtFlush: (text) => this.opts.onReply(userId, contextToken, text),
-      onToolProgress: (text) => this.opts.onReply(userId, contextToken, text),
+      onThoughtFlush: (text) => this.opts.onProgress(userId, contextToken, text),
+      onToolProgress: (text) => this.opts.onProgress(userId, contextToken, text),
       onImageReceived: (data, mimeType) => this.opts.onImageReceived(userId, contextToken, data, mimeType),
       showThoughts: this.opts.showThoughts,
     });
@@ -168,9 +170,9 @@ export class AcpSessionManager {
           sendTyping: () =>
             this.opts.sendTyping(session.userId, pending.contextToken),
           onThoughtFlush: (text) =>
-            this.opts.onReply(session.userId, pending.contextToken, text),
+            this.opts.onProgress(session.userId, pending.contextToken, text),
           onToolProgress: (text) =>
-            this.opts.onReply(session.userId, pending.contextToken, text),
+            this.opts.onProgress(session.userId, pending.contextToken, text),
           onImageReceived: (data, mimeType) =>
             this.opts.onImageReceived(session.userId, pending.contextToken, data, mimeType),
         });
