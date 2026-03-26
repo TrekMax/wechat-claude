@@ -1,5 +1,6 @@
 /**
- * Manages spawning and killing ACP agent subprocesses.
+ * Spawn and manage ACP agent subprocesses.
+ * Based on wechat-acp/src/acp/agent-manager.ts
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -13,20 +14,19 @@ export interface AgentProcessInfo {
   sessionId: string;
 }
 
-export interface SpawnAgentParams {
+export async function spawnAgent(params: {
   command: string;
   args: string[];
   cwd: string;
   env?: Record<string, string>;
   client: AcpClient;
-}
-
-export async function spawnAgent(
-  params: SpawnAgentParams
-): Promise<AgentProcessInfo> {
-  const { command, args, cwd, env, client } = params;
+  log: (msg: string) => void;
+}): Promise<AgentProcessInfo> {
+  const { command, args, cwd, env, client, log } = params;
 
   const useShell = process.platform === "win32";
+
+  log(`Spawning agent: ${command} ${args.join(" ")} (cwd: ${cwd}, shell=${useShell})`);
 
   const proc = spawn(command, args, {
     stdio: ["pipe", "pipe", "inherit"],
@@ -35,22 +35,28 @@ export async function spawnAgent(
     shell: useShell,
   });
 
+  proc.on("error", (err) => {
+    log(`Agent process error: ${String(err)}`);
+  });
+
+  proc.on("exit", (code, signal) => {
+    log(`Agent process exited: code=${code} signal=${signal}`);
+  });
+
   if (!proc.stdin || !proc.stdout) {
-    throw new Error("Failed to create agent subprocess with pipe stdio");
+    proc.kill();
+    throw new Error("Failed to get agent process stdio");
   }
 
-  const input = Writable.toWeb(
-    proc.stdin
-  ) as WritableStream<Uint8Array>;
-  const output = Readable.toWeb(
-    proc.stdout
-  ) as ReadableStream<Uint8Array>;
-
+  const input = Writable.toWeb(proc.stdin);
+  const output = Readable.toWeb(proc.stdout) as ReadableStream<Uint8Array>;
   const stream = acp.ndJsonStream(input, output);
+
   const connection = new acp.ClientSideConnection(() => client, stream);
 
-  // Initialize ACP protocol
-  await connection.initialize({
+  // Initialize
+  log("Initializing ACP connection...");
+  const initResult = await connection.initialize({
     protocolVersion: acp.PROTOCOL_VERSION,
     clientInfo: {
       name: "wechat-claude",
@@ -64,12 +70,15 @@ export async function spawnAgent(
       },
     },
   });
+  log(`ACP initialized (protocol v${initResult.protocolVersion})`);
 
   // Create session
+  log("Creating ACP session...");
   const sessionResult = await connection.newSession({
     cwd,
     mcpServers: [],
   });
+  log(`ACP session created: ${sessionResult.sessionId}`);
 
   return {
     process: proc,
@@ -81,9 +90,8 @@ export async function spawnAgent(
 export function killAgent(proc: ChildProcess): void {
   if (!proc.killed) {
     proc.kill("SIGTERM");
-    const forceTimer = setTimeout(() => {
+    setTimeout(() => {
       if (!proc.killed) proc.kill("SIGKILL");
-    }, 5_000);
-    forceTimer.unref();
+    }, 5_000).unref();
   }
 }

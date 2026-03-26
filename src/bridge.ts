@@ -65,10 +65,11 @@ export class WeChatClaudeBridge {
         idleTimeoutMs: config.session.idleTimeoutMs,
         maxConcurrentUsers: config.session.maxConcurrentUsers,
         showThoughts: config.agent.showThoughts,
+        log: (msg) => console.log(`[acp] ${msg}`),
         onReply: (userId, contextToken, text) =>
           this.sendReply(userId, contextToken, text),
         sendTyping: async () => {
-          // typing is best-effort, no-op for now
+          // typing is best-effort
         },
       });
     }

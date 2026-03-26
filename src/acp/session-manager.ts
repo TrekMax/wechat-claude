@@ -1,6 +1,9 @@
 /**
- * ACP Session Manager — manages per-user agent subprocess sessions.
- * Each user gets their own agent process with independent conversation.
+ * Per-user ACP session manager.
+ * Each WeChat user gets their own agent subprocess + ACP session.
+ * Messages are queued per-user to ensure serialized processing.
+ *
+ * Based on wechat-acp/src/acp/session.ts
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -15,6 +18,7 @@ export interface AcpSessionManagerOpts {
   idleTimeoutMs: number;
   maxConcurrentUsers: number;
   showThoughts: boolean;
+  log: (msg: string) => void;
   onReply: (userId: string, contextToken: string, text: string) => Promise<void>;
   sendTyping: (userId: string, contextToken: string) => Promise<void>;
 }
@@ -38,6 +42,7 @@ export class AcpSessionManager {
   private sessions = new Map<string, AcpUserSession>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private opts: AcpSessionManagerOpts;
+  private aborted = false;
 
   constructor(opts: AcpSessionManagerOpts) {
     this.opts = opts;
@@ -53,11 +58,13 @@ export class AcpSessionManager {
   }
 
   async stop(): Promise<void> {
+    this.aborted = true;
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
-    for (const [, session] of this.sessions) {
+    for (const [userId, session] of this.sessions) {
+      this.opts.log(`Stopping session for ${userId}`);
       killAgent(session.agentInfo.process);
     }
     this.sessions.clear();
@@ -70,7 +77,6 @@ export class AcpSessionManager {
     let session = this.sessions.get(userId);
 
     if (!session) {
-      // Evict oldest if at capacity
       if (this.sessions.size >= this.opts.maxConcurrentUsers) {
         this.evictOldest();
       }
@@ -84,7 +90,10 @@ export class AcpSessionManager {
     session.queue.push(message);
 
     if (!session.processing) {
-      this.processQueue(session);
+      session.processing = true;
+      this.processQueue(session).catch((err) => {
+        this.opts.log(`[${userId}] queue processing error: ${String(err)}`);
+      });
     }
   }
 
@@ -96,6 +105,8 @@ export class AcpSessionManager {
     userId: string,
     contextToken: string
   ): Promise<AcpUserSession> {
+    this.opts.log(`Creating new session for ${userId}`);
+
     const client = new AcpClient({
       sendTyping: () => this.opts.sendTyping(userId, contextToken),
       onThoughtFlush: (text) => this.opts.onReply(userId, contextToken, text),
@@ -109,9 +120,19 @@ export class AcpSessionManager {
       cwd: this.opts.agentCwd,
       env: this.opts.agentEnv,
       client,
+      log: (msg) => this.opts.log(`[${userId}] ${msg}`),
     });
 
-    const session: AcpUserSession = {
+    // If agent process exits, clean up the session
+    agentInfo.process.on("exit", () => {
+      const s = this.sessions.get(userId);
+      if (s && s.agentInfo.process === agentInfo.process) {
+        this.opts.log(`Agent process for ${userId} exited, removing session`);
+        this.sessions.delete(userId);
+      }
+    });
+
+    return {
       userId,
       contextToken,
       client,
@@ -120,66 +141,90 @@ export class AcpSessionManager {
       processing: false,
       lastActivity: Date.now(),
     };
-
-    // Clean up session if agent process exits
-    agentInfo.process.on("exit", () => {
-      this.sessions.delete(userId);
-    });
-
-    return session;
   }
 
   private async processQueue(session: AcpUserSession): Promise<void> {
-    session.processing = true;
+    try {
+      while (session.queue.length > 0 && !this.aborted) {
+        const pending = session.queue.shift()!;
 
-    while (session.queue.length > 0) {
-      const msg = session.queue.shift()!;
-
-      // Update callbacks with latest contextToken
-      session.client.updateCallbacks({
-        sendTyping: () =>
-          this.opts.sendTyping(session.userId, msg.contextToken),
-        onThoughtFlush: (text) =>
-          this.opts.onReply(session.userId, msg.contextToken, text),
-        onToolProgress: (text) =>
-          this.opts.onReply(session.userId, msg.contextToken, text),
-      });
-
-      try {
-        await session.client.flush(); // Reset chunks
-        await this.opts.sendTyping(session.userId, msg.contextToken);
-
-        await session.agentInfo.connection.prompt({
-          sessionId: session.agentInfo.sessionId,
-          prompt: msg.prompt,
+        // Update callbacks with latest contextToken
+        session.client.updateCallbacks({
+          sendTyping: () =>
+            this.opts.sendTyping(session.userId, pending.contextToken),
+          onThoughtFlush: (text) =>
+            this.opts.onReply(session.userId, pending.contextToken, text),
+          onToolProgress: (text) =>
+            this.opts.onReply(session.userId, pending.contextToken, text),
         });
 
-        const text = await session.client.flush();
-        if (text.trim()) {
-          await this.opts.onReply(session.userId, msg.contextToken, text);
-        }
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        console.error(
-          `[acp] Error processing message for ${session.userId}:`,
-          errorMsg
-        );
+        // Reset chunks for the new turn
+        await session.client.flush();
+
         try {
-          await this.opts.onReply(
-            session.userId,
-            msg.contextToken,
-            `[Agent error: ${errorMsg}]`
+          // Send typing immediately so user knows the prompt was received
+          this.opts.sendTyping(session.userId, pending.contextToken).catch(() => {});
+
+          // Send ACP prompt
+          this.opts.log(`[${session.userId}] Sending prompt to agent...`);
+          const result = await session.agentInfo.connection.prompt({
+            sessionId: session.agentInfo.sessionId,
+            prompt: pending.prompt,
+          });
+
+          // Collect accumulated text
+          let replyText = await session.client.flush();
+
+          if (result.stopReason === "cancelled") {
+            replyText += "\n[cancelled]";
+          } else if (result.stopReason === "refusal") {
+            replyText += "\n[agent refused to continue]";
+          }
+
+          this.opts.log(
+            `[${session.userId}] Agent done (${result.stopReason}), reply ${replyText.length} chars`
           );
-        } catch {
-          // best effort
+
+          if (replyText.trim()) {
+            await this.opts.onReply(
+              session.userId,
+              pending.contextToken,
+              replyText
+            );
+          }
+        } catch (err) {
+          this.opts.log(
+            `[${session.userId}] Agent prompt error: ${String(err)}`
+          );
+
+          // Check if agent died
+          if (
+            session.agentInfo.process.killed ||
+            session.agentInfo.process.exitCode !== null
+          ) {
+            this.opts.log(
+              `[${session.userId}] Agent process died, removing session`
+            );
+            this.sessions.delete(session.userId);
+            return;
+          }
+
+          try {
+            await this.opts.onReply(
+              session.userId,
+              pending.contextToken,
+              `Agent error: ${String(err)}`
+            );
+          } catch {
+            // best effort
+          }
         }
+
+        session.lastActivity = Date.now();
       }
-
-      session.lastActivity = Date.now();
+    } finally {
+      session.processing = false;
     }
-
-    session.processing = false;
   }
 
   private cleanupIdleSessions(): void {
@@ -189,6 +234,9 @@ export class AcpSessionManager {
         !session.processing &&
         now - session.lastActivity > this.opts.idleTimeoutMs
       ) {
+        this.opts.log(
+          `Session for ${userId} idle, removing`
+        );
         killAgent(session.agentInfo.process);
         this.sessions.delete(userId);
       }
@@ -207,10 +255,9 @@ export class AcpSessionManager {
     }
 
     if (oldestUserId) {
+      this.opts.log(`Evicting oldest idle session: ${oldestUserId}`);
       const session = this.sessions.get(oldestUserId);
-      if (session) {
-        killAgent(session.agentInfo.process);
-      }
+      if (session) killAgent(session.agentInfo.process);
       this.sessions.delete(oldestUserId);
     }
   }
