@@ -247,10 +247,11 @@ export class WeChatClaudeBridge {
       if (arg === "on") this.debug = true;
       else if (arg === "off") this.debug = false;
       else this.debug = !this.debug;
-      await this.sdk.sendText(
-        userId,
-        this.debug ? "Debug mode ON." : "Debug mode OFF.",
-        contextToken
+      await this.reply(
+        userId, contextToken,
+        this.debug
+          ? "Debug 模式已开启 / Debug mode ON"
+          : "Debug 模式已关闭 / Debug mode OFF"
       );
       return true;
     }
@@ -265,30 +266,22 @@ export class WeChatClaudeBridge {
       if (this.config.mode === "acp") {
         if (isViewCmd) {
           const current = this.acpSessions!.getModel();
-          await this.sdk.sendText(
-            userId,
-            `Current model: ${current}\n\nSwitch with:\n/model sonnet\n/model haiku\n/model opus`,
-            contextToken
+          await this.reply(userId, contextToken,
+            `当前模型 / Current model: ${current}\n\n切换方式 / Switch:\n/model sonnet (均衡)\n/model haiku (最快)\n/model opus (最强)`
           );
         } else if (validModels.some(m => m === arg || m.includes(arg!))) {
           this.acpSessions!.setModel(userId, arg!);
-          await this.sdk.sendText(
-            userId,
-            `Model switched to: ${arg}\nSession will restart on next message.`,
-            contextToken
+          await this.reply(userId, contextToken,
+            `模型已切换为 ${arg}\n会话将在下条消息时重启。\n\nModel switched to: ${arg}`
           );
         } else {
-          await this.sdk.sendText(
-            userId,
-            `Unknown model: ${arg}\n\nAvailable: sonnet, haiku, opus`,
-            contextToken
+          await this.reply(userId, contextToken,
+            `未知模型: ${arg}\n可用选项 / Available: sonnet, haiku, opus`
           );
         }
       } else {
-        await this.sdk.sendText(
-          userId,
-          `Current model: ${this.config.claude.model}\n(API mode — restart with --model to change)`,
-          contextToken
+        await this.reply(userId, contextToken,
+          `当前模型 / Current model: ${this.config.claude.model}\n(API 模式，需重启更换 --model)`
         );
       }
       return true;
@@ -298,17 +291,13 @@ export class WeChatClaudeBridge {
     if (cmd === "/new" || cmd === "/reset" || cmd === "/clear") {
       if (this.config.mode === "acp") {
         this.acpSessions!.resetSession(userId);
-        await this.sdk.sendText(
-          userId,
-          "Session reset. Next message will start a new agent.",
-          contextToken
+        await this.reply(userId, contextToken,
+          "会话已重置，下条消息将启动新的智能体。\nSession reset. Next message starts a new agent."
         );
       } else {
         this.sessions!.resetSession(userId);
-        await this.sdk.sendText(
-          userId,
-          "Conversation has been reset.",
-          contextToken
+        await this.reply(userId, contextToken,
+          "对话历史已清空。\nConversation has been reset."
         );
       }
       return true;
@@ -320,18 +309,19 @@ export class WeChatClaudeBridge {
         const model = this.acpSessions!.getModel();
         const hasSession = this.acpSessions!.hasSession(userId);
         const lines = [
-          `Mode: ACP`,
-          `Model: ${model}`,
-          `Session: ${hasSession ? "active (reusing)" : "none (will create on next message)"}`,
-          `Debug: ${this.debug ? "ON" : "OFF"}`,
+          `模式 / Mode: ACP`,
+          `模型 / Model: ${model}`,
+          `会话 / Session: ${hasSession ? "活跃中（复用）/ active" : "无（下条消息创建）/ none"}`,
+          `Debug: ${this.debug ? "开启 ON" : "关闭 OFF"}`,
         ];
-        await this.sdk.sendText(userId, lines.join("\n"), contextToken);
+        await this.reply(userId, contextToken, lines.join("\n"));
       } else {
-        await this.sdk.sendText(
-          userId,
-          `Mode: API\nModel: ${this.config.claude.model}\nDebug: ${this.debug ? "ON" : "OFF"}`,
-          contextToken
-        );
+        const lines = [
+          `模式 / Mode: API`,
+          `模型 / Model: ${this.config.claude.model}`,
+          `Debug: ${this.debug ? "开启 ON" : "关闭 OFF"}`,
+        ];
+        await this.reply(userId, contextToken, lines.join("\n"));
       }
       return true;
     }
@@ -340,10 +330,10 @@ export class WeChatClaudeBridge {
     if (this.config.mode === "acp") {
       if (cmd === "/show-thoughts" || cmd === "/thoughts") {
         const enabled = this.acpSessions!.toggleShowThoughts(userId);
-        await this.sdk.sendText(
-          userId,
-          enabled ? "Thoughts enabled." : "Thoughts disabled.",
-          contextToken
+        await this.reply(userId, contextToken,
+          enabled
+            ? "已开启思考过程显示。\nThoughts enabled."
+            : "已关闭思考过程显示。\nThoughts disabled."
         );
         return true;
       }
@@ -351,16 +341,16 @@ export class WeChatClaudeBridge {
 
     // /help
     if (cmd === "/help") {
-      const lines = ["Commands:"];
-      lines.push("/new — Start fresh session");
-      lines.push("/model [name] — View/switch model");
-      lines.push("/status — Show session info");
+      const lines = ["可用命令 / Commands:"];
+      lines.push("/new — 新建会话 / New session");
+      lines.push("/model [名称] — 查看/切换模型 / View/switch model");
+      lines.push("/status — 查看状态 / Session info");
       if (this.config.mode === "acp") {
-        lines.push("/show-thoughts — Toggle thinking");
+        lines.push("/show-thoughts — 切换思考过程 / Toggle thinking");
       }
-      lines.push("/debug [on|off] — Toggle debug");
-      lines.push("/help — This message");
-      await this.sdk.sendText(userId, lines.join("\n"), contextToken);
+      lines.push("/debug [on|off] — 调试模式 / Debug mode");
+      lines.push("/help — 帮助 / Help");
+      await this.reply(userId, contextToken, lines.join("\n"));
       return true;
     }
 
@@ -476,6 +466,11 @@ export class WeChatClaudeBridge {
         logError("bridge", `Failed to send error to ${userId}`);
       }
     }
+  }
+
+  /** Short helper for sending command responses */
+  private async reply(userId: string, contextToken: string, text: string): Promise<void> {
+    await this.sdk.sendText(userId, text, contextToken);
   }
 
   // -- Media helpers --
