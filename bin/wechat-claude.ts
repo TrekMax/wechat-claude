@@ -168,7 +168,9 @@ async function getToken(): Promise<string> {
     const qrUrl = data?.url;
     if (!qrUrl) return;
     if (renderQr) {
-      renderQr(qrUrl, { small: true });
+      renderQr(qrUrl, { small: true }, (qr: string) => {
+        console.log(qr);
+      });
     } else {
       console.log(`\nScan this URL with WeChat:\n${qrUrl}\n`);
     }
