@@ -12,7 +12,6 @@ vi.mock("../src/claude/client.js", () => ({
 
 // Mock WeChat SDK
 const mockSendText = vi.fn();
-const mockSendTyping = vi.fn();
 const mockOnMessage = vi.fn();
 const mockStart = vi.fn();
 const mockStop = vi.fn();
@@ -23,11 +22,11 @@ vi.mock("@xmccln/wechat-ilink-sdk", () => ({
     start: mockStart,
     stop: mockStop,
     onMessage: mockOnMessage,
-    messaging: {
-      sender: { sendTyping: mockSendTyping },
-    },
   })),
   TokenAuthProvider: vi.fn(),
+  MediaDownloader: vi.fn().mockImplementation(() => ({
+    downloadImage: vi.fn().mockResolvedValue(null),
+  })),
 }));
 
 function makeConfig(): WeChatClaudeConfig {
@@ -53,6 +52,16 @@ function makeConfig(): WeChatClaudeConfig {
   };
 }
 
+// Helper: create SDK-shaped message
+function makeTextMsg(text: string, userId = "user1", contextToken = "ctx1") {
+  return {
+    from_user_id: userId,
+    context_token: contextToken,
+    message_type: 1,
+    item_list: [{ type: 1, text_item: { text } }],
+  };
+}
+
 describe("WeChatClaudeBridge", () => {
   let bridge: WeChatClaudeBridge;
 
@@ -64,6 +73,7 @@ describe("WeChatClaudeBridge", () => {
       outputTokens: 8,
       stopReason: "end_turn",
     });
+    mockSendText.mockResolvedValue(undefined);
     bridge = new WeChatClaudeBridge(makeConfig(), "test-token");
   });
 
@@ -77,15 +87,7 @@ describe("WeChatClaudeBridge", () => {
   });
 
   it("should process text message and reply via Claude", async () => {
-    const handler = mockOnMessage.mock.calls[0][0];
-    mockSendText.mockResolvedValue(undefined);
-
-    await handler({
-      msg_type: 1,
-      content: { text: "Hello" },
-      from_user_id: "user1",
-      context_token: "ctx1",
-    });
+    await bridge.processMessage(makeTextMsg("Hello"));
 
     expect(mockChat).toHaveBeenCalledTimes(1);
     expect(mockSendText).toHaveBeenCalledWith(
@@ -96,15 +98,7 @@ describe("WeChatClaudeBridge", () => {
   });
 
   it("should handle reset command without calling Claude", async () => {
-    const handler = mockOnMessage.mock.calls[0][0];
-    mockSendText.mockResolvedValue(undefined);
-
-    await handler({
-      msg_type: 1,
-      content: { text: "/reset" },
-      from_user_id: "user1",
-      context_token: "ctx1",
-    });
+    await bridge.processMessage(makeTextMsg("/reset"));
 
     expect(mockChat).not.toHaveBeenCalled();
     expect(mockSendText).toHaveBeenCalledWith(
@@ -115,16 +109,9 @@ describe("WeChatClaudeBridge", () => {
   });
 
   it("should handle Claude API errors gracefully", async () => {
-    const handler = mockOnMessage.mock.calls[0][0];
     mockChat.mockRejectedValueOnce(new Error("API rate limited"));
-    mockSendText.mockResolvedValue(undefined);
 
-    await handler({
-      msg_type: 1,
-      content: { text: "hello" },
-      from_user_id: "user1",
-      context_token: "ctx1",
-    });
+    await bridge.processMessage(makeTextMsg("hello"));
 
     expect(mockSendText).toHaveBeenCalledWith(
       "user1",
@@ -140,41 +127,29 @@ describe("WeChatClaudeBridge", () => {
       outputTokens: 500,
       stopReason: "end_turn",
     });
-    mockSendText.mockResolvedValue(undefined);
 
-    const handler = mockOnMessage.mock.calls[0][0];
-    await handler({
-      msg_type: 1,
-      content: { text: "tell me a lot" },
-      from_user_id: "user1",
-      context_token: "ctx1",
-    });
+    await bridge.processMessage(makeTextMsg("tell me a lot"));
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
   });
 
   it("should maintain conversation history across messages", async () => {
-    const handler = mockOnMessage.mock.calls[0][0];
-    mockSendText.mockResolvedValue(undefined);
-
-    await handler({
-      msg_type: 1,
-      content: { text: "first message" },
-      from_user_id: "user1",
-      context_token: "ctx1",
-    });
-
-    await handler({
-      msg_type: 1,
-      content: { text: "second message" },
-      from_user_id: "user1",
-      context_token: "ctx2",
-    });
+    await bridge.processMessage(makeTextMsg("first message"));
+    await bridge.processMessage(makeTextMsg("second message", "user1", "ctx2"));
 
     // Second call should include full conversation history
     const secondCall = mockChat.mock.calls[1];
     const messages = secondCall[0];
     // user, assistant, user = 3 turns
     expect(messages).toHaveLength(3);
+  });
+
+  it("should ignore messages without userId or contextToken", async () => {
+    await bridge.processMessage({
+      item_list: [{ type: 1, text_item: { text: "hi" } }],
+    });
+
+    expect(mockChat).not.toHaveBeenCalled();
+    expect(mockSendText).not.toHaveBeenCalled();
   });
 });

@@ -1,36 +1,53 @@
 import { describe, it, expect, vi } from "vitest";
 import { convertToClaudeContent } from "../../src/adapter/inbound.js";
-import type { WeixinMessage } from "../../src/adapter/inbound.js";
+import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
+
+// Helper to build SDK-shaped messages
+function makeTextMessage(text: string): WeixinMessage {
+  return {
+    from_user_id: "user1",
+    context_token: "ctx1",
+    message_type: 1,
+    item_list: [
+      { type: 1, text_item: { text } },
+    ],
+  };
+}
+
+function makeImageMessage(): WeixinMessage {
+  return {
+    from_user_id: "user1",
+    context_token: "ctx1",
+    message_type: 1,
+    item_list: [
+      {
+        type: 2,
+        image_item: {
+          media: { encrypt_query_param: "param1", aes_key: "key1" },
+        },
+      },
+    ],
+  };
+}
+
+function makeVoiceMessage(transcription?: string): WeixinMessage {
+  return {
+    from_user_id: "user1",
+    context_token: "ctx1",
+    message_type: 1,
+    item_list: [
+      {
+        type: 3,
+        voice_item: {
+          media: { encrypt_query_param: "param1", aes_key: "key1" },
+          ...(transcription ? { text: transcription } : {}),
+        },
+      },
+    ],
+  };
+}
 
 describe("convertToClaudeContent", () => {
-  const makeTextMessage = (text: string): WeixinMessage => ({
-    msg_type: 1, // TEXT
-    content: { text },
-    from_user_id: "user1",
-    context_token: "ctx1",
-  });
-
-  const makeImageMessage = (): WeixinMessage => ({
-    msg_type: 2, // IMAGE
-    content: {
-      media_url: "https://cdn.example.com/image.jpg",
-      aes_key: "0123456789abcdef",
-    },
-    from_user_id: "user1",
-    context_token: "ctx1",
-  });
-
-  const makeVoiceMessage = (transcription?: string): WeixinMessage => ({
-    msg_type: 3, // VOICE
-    content: {
-      media_url: "https://cdn.example.com/voice.silk",
-      aes_key: "0123456789abcdef",
-      ...(transcription ? { transcription } : {}),
-    },
-    from_user_id: "user1",
-    context_token: "ctx1",
-  });
-
   it("should convert text message to text content block", async () => {
     const result = await convertToClaudeContent(makeTextMessage("hello"));
     expect(result).toEqual([{ type: "text", text: "hello" }]);
@@ -41,14 +58,25 @@ describe("convertToClaudeContent", () => {
     expect(result).toEqual([{ type: "text", text: "" }]);
   });
 
-  it("should convert image message to image content block", async () => {
-    const mockDownload = vi.fn().mockResolvedValue(Buffer.from("fake-image-data"));
+  it("should handle empty item_list", async () => {
+    const msg: WeixinMessage = {
+      from_user_id: "user1",
+      context_token: "ctx1",
+      item_list: [],
+    };
+    const result = await convertToClaudeContent(msg);
+    expect(result).toEqual([{ type: "text", text: "[Empty message]" }]);
+  });
+
+  it("should convert image with downloader to base64 content block", async () => {
+    const mockDownload = vi.fn().mockResolvedValue({
+      buffer: Buffer.from("fake-image-data"),
+      mimeType: "image/jpeg",
+    });
+
     const result = await convertToClaudeContent(makeImageMessage(), mockDownload);
 
-    expect(mockDownload).toHaveBeenCalledWith(
-      "https://cdn.example.com/image.jpg",
-      "0123456789abcdef"
-    );
+    expect(mockDownload).toHaveBeenCalled();
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       type: "image",
@@ -69,9 +97,7 @@ describe("convertToClaudeContent", () => {
   });
 
   it("should use voice transcription when available", async () => {
-    const result = await convertToClaudeContent(
-      makeVoiceMessage("hello world")
-    );
+    const result = await convertToClaudeContent(makeVoiceMessage("hello world"));
     expect(result).toEqual([
       { type: "text", text: "[Voice message transcription]: hello world" },
     ]);
@@ -86,18 +112,26 @@ describe("convertToClaudeContent", () => {
 
   it("should handle message with reference/quote", async () => {
     const msg: WeixinMessage = {
-      msg_type: 1,
-      content: { text: "my reply" },
       from_user_id: "user1",
       context_token: "ctx1",
-      ref_message: {
-        content: { text: "original message" },
-        msg_type: 1,
-      },
+      message_type: 1,
+      item_list: [
+        {
+          type: 1,
+          text_item: { text: "my reply" },
+          ref_msg: {
+            message_item: {
+              type: 1,
+              text_item: { text: "original message" },
+            },
+          },
+        },
+      ],
     };
     const result = await convertToClaudeContent(msg);
     expect(result[0]).toMatchObject({ type: "text" });
-    expect((result[0] as { type: "text"; text: string }).text).toContain("original message");
-    expect((result[0] as { type: "text"; text: string }).text).toContain("my reply");
+    const text = (result[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("original message");
+    expect(text).toContain("my reply");
   });
 });

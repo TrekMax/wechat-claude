@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import type { ConversationTurn, ClaudeResponse } from "./types.js";
 
 export interface ClaudeClientConfig {
@@ -25,14 +26,29 @@ export class ClaudeClient {
     messages: ConversationTurn[],
     systemPrompt: string
   ): Promise<ClaudeResponse> {
+    const apiMessages: MessageParam[] = messages.map((turn) => ({
+      role: turn.role,
+      content: turn.content.map((block) => {
+        if (block.type === "text") {
+          return { type: "text" as const, text: block.text };
+        }
+        // Image block
+        return {
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: block.source.media_type,
+            data: block.source.data,
+          },
+        };
+      }),
+    }));
+
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: this.maxTokens,
       system: systemPrompt,
-      messages: messages.map((turn) => ({
-        role: turn.role,
-        content: turn.content,
-      })),
+      messages: apiMessages,
       ...(this.temperature !== undefined && {
         temperature: this.temperature,
       }),

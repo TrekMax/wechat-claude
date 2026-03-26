@@ -1,10 +1,12 @@
-import { WeixinSDK, TokenAuthProvider } from "@xmccln/wechat-ilink-sdk";
+import {
+  WeixinSDK,
+  TokenAuthProvider,
+  MediaDownloader,
+} from "@xmccln/wechat-ilink-sdk";
+import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
 import { ClaudeClient } from "./claude/client.js";
 import { SessionManager } from "./session/manager.js";
-import {
-  convertToClaudeContent,
-  type WeixinMessage,
-} from "./adapter/inbound.js";
+import { convertToClaudeContent } from "./adapter/inbound.js";
 import { formatForWeChat, splitText } from "./adapter/outbound.js";
 import type { WeChatClaudeConfig } from "./config.js";
 
@@ -15,15 +17,18 @@ export class WeChatClaudeBridge {
   private claude: ClaudeClient;
   private sessions: SessionManager;
   private config: WeChatClaudeConfig;
+  private mediaDownloader: MediaDownloader;
 
   constructor(config: WeChatClaudeConfig, token: string) {
     this.config = config;
 
     const authProvider = new TokenAuthProvider(token);
     this.sdk = new WeixinSDK({
-      authProvider,
-      baseUrl: config.wechat.baseUrl,
-      cdnBaseUrl: config.wechat.cdnBaseUrl,
+      config: {
+        baseUrl: config.wechat.baseUrl,
+        cdnBaseUrl: config.wechat.cdnBaseUrl,
+      },
+      auth: authProvider,
     });
 
     this.claude = new ClaudeClient({
@@ -40,7 +45,11 @@ export class WeChatClaudeBridge {
       resetKeywords: config.session.resetKeywords,
     });
 
-    this.sdk.onMessage((msg: WeixinMessage) => this.handleMessage(msg));
+    this.mediaDownloader = new MediaDownloader(config.wechat.cdnBaseUrl);
+
+    this.sdk.onMessage((msg: WeixinMessage) => {
+      this.processMessage(msg);
+    });
   }
 
   async start(): Promise<void> {
@@ -53,14 +62,18 @@ export class WeChatClaudeBridge {
     this.sdk.stop();
   }
 
-  private async handleMessage(msg: WeixinMessage): Promise<void> {
+  /** Process a single WeChat message. Public for testability. */
+  async processMessage(msg: WeixinMessage): Promise<void> {
     const userId = msg.from_user_id;
     const contextToken = msg.context_token;
 
+    if (!userId || !contextToken) return;
+
     try {
-      // Check for reset command
-      if (msg.msg_type === 1 && msg.content?.text) {
-        const text = String(msg.content.text).trim();
+      // Check for reset command — look at first text item
+      const firstTextItem = msg.item_list?.find((item) => item.type === 1);
+      if (firstTextItem?.text_item?.text) {
+        const text = firstTextItem.text_item.text.trim();
         if (this.sessions.isResetCommand(text)) {
           this.sessions.resetSession(userId);
           await this.sdk.sendText(
@@ -73,7 +86,16 @@ export class WeChatClaudeBridge {
       }
 
       // Convert WeChat message to Claude content blocks
-      const contentBlocks = await convertToClaudeContent(msg);
+      const downloadImage = async (message: WeixinMessage) => {
+        const result = await this.mediaDownloader.downloadImage(message);
+        if (!result) return null;
+        const { readFileSync } = await import("node:fs");
+        const buffer = readFileSync(result.path);
+        await result.cleanup();
+        return { buffer, mimeType: result.mimeType };
+      };
+
+      const contentBlocks = await convertToClaudeContent(msg, downloadImage);
 
       // Get or create session
       const session = this.sessions.getOrCreateSession(userId);
