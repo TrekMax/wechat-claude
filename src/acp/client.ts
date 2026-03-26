@@ -34,6 +34,14 @@ export class AcpClient implements acp.Client {
     this.opts = { ...this.opts, ...callbacks };
   }
 
+  setShowThoughts(enabled: boolean): void {
+    this.opts.showThoughts = enabled;
+  }
+
+  get showThoughts(): boolean {
+    return this.opts.showThoughts;
+  }
+
   // -- ACP Client interface methods --
 
   async requestPermission(

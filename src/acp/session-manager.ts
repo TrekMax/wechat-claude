@@ -101,6 +101,15 @@ export class AcpSessionManager {
     return this.sessions.size;
   }
 
+  /** Toggle showThoughts for a specific user's session */
+  toggleShowThoughts(userId: string): boolean {
+    const session = this.sessions.get(userId);
+    if (!session) return false;
+    const newValue = !session.client.showThoughts;
+    session.client.setShowThoughts(newValue);
+    return newValue;
+  }
+
   private async createSession(
     userId: string,
     contextToken: string

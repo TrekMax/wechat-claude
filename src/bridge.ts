@@ -125,15 +125,28 @@ export class WeChatClaudeBridge {
     if (!userId || !contextToken) return;
 
     try {
-      // Check for reset command
+      // Check for commands
       const firstTextItem = msg.item_list?.find((item) => item.type === 1);
       if (firstTextItem?.text_item?.text) {
         const text = firstTextItem.text_item.text.trim();
-        if (this.sessions!.isResetCommand(text)) {
+        const textLower = text.toLowerCase();
+
+        if (this.sessions!.isResetCommand(textLower)) {
           this.sessions!.resetSession(userId);
           await this.sdk.sendText(
             userId,
             "Conversation has been reset. Send me a new message to start fresh.",
+            contextToken
+          );
+          return;
+        }
+
+        if (textLower === "/help") {
+          await this.sdk.sendText(
+            userId,
+            "Available commands:\n" +
+              "/reset — Clear conversation history\n" +
+              "/help — Show this help message",
             contextToken
           );
           return;
@@ -191,6 +204,35 @@ export class WeChatClaudeBridge {
     }
 
     console.log(`[bridge] Processing ACP message from ${userId}`);
+
+    // Handle chat commands
+    const firstTextItem = msg.item_list?.find((item) => item.type === 1);
+    if (firstTextItem?.text_item?.text) {
+      const text = firstTextItem.text_item.text.trim().toLowerCase();
+
+      if (text === "/show-thoughts" || text === "/thoughts") {
+        const enabled = this.acpSessions!.toggleShowThoughts(userId);
+        await this.sdk.sendText(
+          userId,
+          enabled
+            ? "Thoughts enabled. You will now see the agent's thinking process."
+            : "Thoughts disabled.",
+          contextToken
+        );
+        return;
+      }
+
+      if (text === "/help") {
+        await this.sdk.sendText(
+          userId,
+          "Available commands:\n" +
+            "/show-thoughts — Toggle agent thinking visibility\n" +
+            "/help — Show this help message",
+          contextToken
+        );
+        return;
+      }
+    }
 
     try {
       // Convert to ACP content blocks
