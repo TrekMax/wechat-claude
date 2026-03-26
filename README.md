@@ -6,27 +6,33 @@ WeChat-to-Claude bridge via iLink protocol. Send messages to your WeChat bot, ge
 
 ## Features
 
+- **Dual mode** — API mode (lightweight chat) or ACP mode (full Claude Code agent)
 - **Text messaging** — Send text, receive Claude's response
 - **Image vision** — Send images, Claude analyzes them via Vision API
 - **Voice transcription** — Voice messages auto-transcribed and forwarded
 - **Multi-user** — Up to 10 concurrent users, each with independent conversation
 - **Conversation memory** — Sliding window history (50 turns), reset with `/reset`
+- **ACP agent support** — Claude Code, Copilot, Gemini, or any ACP-compatible agent
 - **Auto text splitting** — Long responses split into multiple WeChat messages
 
 ## Quick Start
 
+### API Mode (lightweight chat)
+
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Set API key
 export ANTHROPIC_API_KEY=sk-ant-xxxxx
-
-# 3. Run (first time will show QR code for WeChat login)
 npm run dev
 ```
 
-Scan the QR code with WeChat. Once logged in, send a message to your bot account to start chatting with Claude.
+### ACP Mode (full Claude Code agent)
+
+```bash
+npm install
+npm run dev -- --agent claude
+```
+
+Scan the QR code with WeChat. Once logged in, send a message to your bot account to start chatting.
 
 ## Chat Commands
 

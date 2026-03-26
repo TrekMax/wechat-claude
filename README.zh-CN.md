@@ -4,27 +4,33 @@
 
 ## 功能特性
 
+- **双模式运行** — API 模式（轻量聊天）或 ACP 模式（完整 Claude Code 智能体）
 - **文本消息** — 发送文本，接收 Claude 的回复
 - **图片识别** — 发送图片，Claude 通过 Vision API 进行分析
 - **语音转写** — 语音消息自动转文字后转发给 Claude
 - **多用户支持** — 最多 10 个并发用户，各自拥有独立对话
 - **对话记忆** — 滑动窗口历史记录（50 轮），发送 `/reset` 可重置
+- **ACP 智能体支持** — Claude Code、Copilot、Gemini 或任何 ACP 兼容的智能体
 - **长文本自动分段** — 超长回复自动拆分为多条微信消息
 
 ## 快速开始
 
+### API 模式（轻量聊天）
+
 ```bash
-# 1. 安装依赖
 npm install
-
-# 2. 设置 API 密钥
 export ANTHROPIC_API_KEY=sk-ant-xxxxx
-
-# 3. 启动（首次运行会显示登录二维码）
 npm run dev
 ```
 
-使用微信扫描终端中的二维码完成登录。登录成功后，向你的机器人账号发送消息即可开始与 Claude 对话。
+### ACP 模式（完整 Claude Code 智能体）
+
+```bash
+npm install
+npm run dev -- --agent claude
+```
+
+使用微信扫描终端中的二维码完成登录。登录成功后，向你的机器人账号发送消息即可开始对话。
 
 ## 聊天指令
 

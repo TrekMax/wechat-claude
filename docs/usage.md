@@ -40,25 +40,62 @@ SESSION_IDLE_TIMEOUT_HOURS=24              # Session expiry time
 wechat-claude [options]
 
 Options:
-  --login                   Force re-login (show QR code)
-  --model <model>           Override Claude model
-  --system-prompt <prompt>  Override system prompt
-  --max-tokens <n>          Override max response tokens
-  -h, --help                Show help
+  --agent <name|cmd>   Enable ACP mode with an agent preset or command
+  --cwd <path>         Working directory for ACP agent (default: current dir)
+  --show-thoughts      Show agent thinking process in chat (ACP mode)
+  --login              Force re-login (show QR code)
+  --model <model>      Override Claude model (API mode)
+  --system-prompt <p>  Override system prompt (API mode)
+  --max-tokens <n>     Override max response tokens (API mode)
+  -h, --help           Show help
 ```
 
 CLI options take precedence over environment variables.
+
+## Modes
+
+### API Mode (default)
+
+Direct Claude API calls for text and image chat. Requires `ANTHROPIC_API_KEY`.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxxxx
+npm run dev
+```
+
+### ACP Mode
+
+Launches a full agent subprocess (e.g. Claude Code) that can read/write files, execute commands, and use tools. Activated with `--agent`.
+
+```bash
+# Built-in preset
+npm run dev -- --agent claude
+
+# With project directory
+npm run dev -- --agent claude --cwd ~/projects/myapp
+
+# Show agent thinking
+npm run dev -- --agent claude --show-thoughts
+
+# Custom agent command
+npm run dev -- --agent "npx my-custom-agent --acp"
+```
+
+Built-in agent presets:
+
+| Preset | Agent | Command |
+|--------|-------|---------|
+| `claude` | Claude Code | `npx @anthropic-ai/claude-code --acp` |
+| `copilot` | GitHub Copilot | `npx @github/copilot --acp --yolo` |
+| `gemini` | Gemini CLI | `npx @google/gemini-cli --experimental-acp` |
 
 ## Running
 
 ### First Time
 
 ```bash
-# Set your API key
-export ANTHROPIC_API_KEY=sk-ant-xxxxx
-
-# Start the bridge
-npm run dev
+npm run dev                    # API mode
+npm run dev -- --agent claude  # ACP mode
 ```
 
 A QR code will be displayed in the terminal. Scan it with WeChat to log in. The auth token is saved to `~/.wechat-claude/token.json` for future sessions.

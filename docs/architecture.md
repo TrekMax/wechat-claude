@@ -2,8 +2,9 @@
 
 ## Overview
 
-wechat-claude is a bridge that connects WeChat messaging (via iLink protocol) to the Claude API. It receives messages from WeChat users, forwards them to Claude, and sends Claude's responses back.
+wechat-claude is a dual-mode bridge connecting WeChat messaging (via iLink protocol) to Claude. It supports two modes:
 
+### API Mode — Direct Claude API calls
 ```
 +------------------+       +------------------+       +------------------+
 |                  |       |                  |       |                  |
@@ -17,6 +18,20 @@ wechat-claude is a bridge that connects WeChat messaging (via iLink protocol) to
    (Long-polling)           (HTTPS REST)
 ```
 
+### ACP Mode — Full agent subprocess
+```
++------------------+       +------------------+       +------------------+
+|                  |       |                  |       |                  |
+|  WeChat Client   | <---> |  wechat-claude   | <---> |  Agent Process   |
+|  (User's phone)  |       |    (Bridge)      |       | (Claude Code,    |
+|                  |       |                  |       |  Copilot, etc.)  |
++------------------+       +------------------+       +------------------+
+        ^                         |
+        |                         v
+   iLink Protocol            ACP Protocol
+   (Long-polling)          (ndjson over stdio)
+```
+
 ## Module Structure
 
 ```
@@ -25,17 +40,22 @@ wechat-claude/
 │   └── wechat-claude.ts        # CLI entry point
 ├── src/
 │   ├── index.ts                # Public API exports
-│   ├── config.ts               # Configuration loading and validation
-│   ├── bridge.ts               # Core orchestrator
+│   ├── config.ts               # Configuration (dual mode support)
+│   ├── bridge.ts               # Core orchestrator (dual mode routing)
 │   ├── adapter/
-│   │   ├── inbound.ts          # WeChat → Claude content conversion
-│   │   └── outbound.ts         # Claude → WeChat text formatting
-│   ├── claude/
+│   │   ├── inbound.ts          # WeChat → Claude/ACP content conversion
+│   │   └── outbound.ts         # Claude/ACP → WeChat text formatting
+│   ├── claude/                 # API mode modules
 │   │   ├── client.ts           # Anthropic SDK wrapper
 │   │   ├── conversation.ts     # Per-user conversation history
 │   │   └── types.ts            # Claude-specific type definitions
+│   ├── acp/                    # ACP mode modules
+│   │   ├── client.ts           # ACP Client (chunk accumulation, permissions)
+│   │   ├── agent-manager.ts    # Agent subprocess spawning/killing
+│   │   ├── session-manager.ts  # Per-user agent process management
+│   │   └── types.ts            # Agent presets and resolution
 │   └── session/
-│       ├── manager.ts          # Multi-user session management
+│       ├── manager.ts          # Multi-user session management (API mode)
 │       └── types.ts            # Session type definitions
 └── tests/                      # Mirror of src/ structure
 ```
@@ -140,11 +160,12 @@ Manages multiple concurrent user sessions:
 
 ## Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `@xmccln/wechat-ilink-sdk` | WeChat iLink protocol (auth, messaging, media encryption) |
-| `@anthropic-ai/sdk` | Claude API client |
-| `qrcode-terminal` | QR code rendering for terminal login |
+| Package | Purpose | Mode |
+|---------|---------|------|
+| `@xmccln/wechat-ilink-sdk` | WeChat iLink protocol (auth, messaging, media encryption) | Both |
+| `@anthropic-ai/sdk` | Claude API client | API |
+| `@agentclientprotocol/sdk` | ACP protocol for agent subprocess communication | ACP |
+| `qrcode-terminal` | QR code rendering for terminal login | Both |
 
 ## Security Considerations
 

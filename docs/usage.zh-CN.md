@@ -40,25 +40,62 @@ SESSION_IDLE_TIMEOUT_HOURS=24              # 会话空闲超时（小时）
 wechat-claude [选项]
 
 选项：
-  --login                   强制重新登录（显示二维码）
-  --model <model>           覆盖 Claude 模型
-  --system-prompt <prompt>  覆盖系统提示词
-  --max-tokens <n>          覆盖最大响应 Token 数
-  -h, --help                显示帮助信息
+  --agent <名称|命令>   启用 ACP 模式，指定智能体预设或自定义命令
+  --cwd <路径>          ACP 智能体工作目录（默认：当前目录）
+  --show-thoughts       在聊天中显示智能体思考过程（ACP 模式）
+  --login               强制重新登录（显示二维码）
+  --model <model>       覆盖 Claude 模型（API 模式）
+  --system-prompt <p>   覆盖系统提示词（API 模式）
+  --max-tokens <n>      覆盖最大响应 Token 数（API 模式）
+  -h, --help            显示帮助信息
 ```
 
 CLI 选项的优先级高于环境变量。
+
+## 运行模式
+
+### API 模式（默认）
+
+直接调用 Claude API，支持文本和图片对话。需要 `ANTHROPIC_API_KEY`。
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxxxx
+npm run dev
+```
+
+### ACP 模式
+
+启动完整的智能体子进程（如 Claude Code），可以读写文件、执行命令、使用工具。通过 `--agent` 参数激活。
+
+```bash
+# 使用内置预设
+npm run dev -- --agent claude
+
+# 指定项目目录
+npm run dev -- --agent claude --cwd ~/projects/myapp
+
+# 显示智能体思考过程
+npm run dev -- --agent claude --show-thoughts
+
+# 自定义智能体命令
+npm run dev -- --agent "npx my-custom-agent --acp"
+```
+
+内置智能体预设：
+
+| 预设名 | 智能体 | 命令 |
+|--------|--------|------|
+| `claude` | Claude Code | `npx @anthropic-ai/claude-code --acp` |
+| `copilot` | GitHub Copilot | `npx @github/copilot --acp --yolo` |
+| `gemini` | Gemini CLI | `npx @google/gemini-cli --experimental-acp` |
 
 ## 运行
 
 ### 首次运行
 
 ```bash
-# 设置 API 密钥
-export ANTHROPIC_API_KEY=sk-ant-xxxxx
-
-# 启动桥接服务
-npm run dev
+npm run dev                    # API 模式
+npm run dev -- --agent claude  # ACP 模式
 ```
 
 终端会显示一个二维码，使用微信扫码登录。认证 Token 会保存到 `~/.wechat-claude/token.json`，后续运行自动复用。
