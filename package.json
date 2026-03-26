@@ -1,0 +1,35 @@
+{
+  "name": "wechat-claude",
+  "version": "0.1.0",
+  "description": "WeChat-to-Claude bridge via iLink protocol",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "wechat-claude": "dist/bin/wechat-claude.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "start": "node dist/bin/wechat-claude.js",
+    "dev": "tsx bin/wechat-claude.ts"
+  },
+  "keywords": ["wechat", "claude", "anthropic", "chatbot", "ilink"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@xmccln/wechat-ilink-sdk": "^1.0.2",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
