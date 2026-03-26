@@ -6,18 +6,26 @@
 
 import * as fs from "node:fs";
 import type * as acp from "@agentclientprotocol/sdk";
+import { log as tslog } from "../logger.js";
 
 export interface AcpClientOpts {
   sendTyping: () => Promise<void>;
   onThoughtFlush: (text: string) => Promise<void>;
   onToolProgress: (text: string) => Promise<void>;
+  onImageReceived: (data: Buffer, mimeType: string) => Promise<void>;
   showThoughts: boolean;
+}
+
+export interface FlushResult {
+  text: string;
+  images: Array<{ data: Buffer; mimeType: string }>;
 }
 
 const TYPING_INTERVAL_MS = 5_000;
 
 export class AcpClient implements acp.Client {
   private chunks: string[] = [];
+  private imageChunks: Array<{ data: Buffer; mimeType: string }> = [];
   private thoughtChunks: string[] = [];
   private lastTypingAt = 0;
   private opts: AcpClientOpts;
@@ -30,6 +38,7 @@ export class AcpClient implements acp.Client {
     sendTyping: () => Promise<void>;
     onThoughtFlush: (text: string) => Promise<void>;
     onToolProgress: (text: string) => Promise<void>;
+    onImageReceived: (data: Buffer, mimeType: string) => Promise<void>;
   }): void {
     this.opts = { ...this.opts, ...callbacks };
   }
@@ -69,9 +78,30 @@ export class AcpClient implements acp.Client {
     switch (sessionUpdate) {
       case "agent_message_chunk": {
         await this.maybeFlushThoughts();
-        const content = update.content as { type: string; text?: string };
+        const content = update.content as {
+          type: string;
+          text?: string;
+          data?: string;
+          mimeType?: string;
+        };
         if (content.type === "text" && content.text) {
           this.chunks.push(content.text);
+        } else if (content.type === "image" && content.data) {
+          tslog("acp", `Received image chunk (${content.mimeType ?? "unknown"})`);
+          const buffer = Buffer.from(content.data, "base64");
+          this.imageChunks.push({
+            data: buffer,
+            mimeType: content.mimeType ?? "image/png",
+          });
+          // Send image immediately
+          try {
+            await this.opts.onImageReceived(
+              buffer,
+              content.mimeType ?? "image/png"
+            );
+          } catch {
+            // best effort
+          }
         }
         await this.maybeSendTyping();
         break;
@@ -88,10 +118,14 @@ export class AcpClient implements acp.Client {
 
       case "tool_call": {
         await this.maybeFlushThoughts();
-        const title = (update as Record<string, unknown>).title as string | undefined;
-        const status = (update as Record<string, unknown>).status as string | undefined;
+        const title = (update as Record<string, unknown>).title as
+          | string
+          | undefined;
+        const status = (update as Record<string, unknown>).status as
+          | string
+          | undefined;
         if (title) {
-          console.log(`[acp] Tool: ${title} (${status ?? "started"})`);
+          tslog("acp", `Tool: ${title} (${status ?? "started"})`);
           try {
             await this.opts.onToolProgress(`[${title}]`);
           } catch {
@@ -105,12 +139,22 @@ export class AcpClient implements acp.Client {
       case "tool_call_update": {
         const status = update.status as string | undefined;
         const updateContent = update.content as
-          | Array<{ type: string; oldText?: string; newText?: string }>
+          | Array<{
+              type: string;
+              oldText?: string;
+              newText?: string;
+            }>
           | undefined;
         if (status === "completed" && updateContent) {
           for (const c of updateContent) {
-            if (c.type === "diff" && c.oldText !== undefined && c.newText !== undefined) {
-              this.chunks.push(`\n\`\`\`diff\n-${c.oldText}\n+${c.newText}\n\`\`\`\n`);
+            if (
+              c.type === "diff" &&
+              c.oldText !== undefined &&
+              c.newText !== undefined
+            ) {
+              this.chunks.push(
+                `\n\`\`\`diff\n-${c.oldText}\n+${c.newText}\n\`\`\`\n`
+              );
             }
           }
         }
@@ -146,6 +190,7 @@ export class AcpClient implements acp.Client {
     await this.maybeFlushThoughts();
     const text = this.chunks.join("");
     this.chunks = [];
+    this.imageChunks = [];
     this.lastTypingAt = 0;
     return text;
   }

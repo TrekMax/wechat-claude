@@ -8,7 +8,11 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import { AcpClient } from "./client.js";
-import { spawnAgent, killAgent, type AgentProcessInfo } from "./agent-manager.js";
+import {
+  spawnAgent,
+  killAgent,
+  type AgentProcessInfo,
+} from "./agent-manager.js";
 
 export interface AcpSessionManagerOpts {
   agentCommand: string;
@@ -20,6 +24,7 @@ export interface AcpSessionManagerOpts {
   showThoughts: boolean;
   log: (msg: string) => void;
   onReply: (userId: string, contextToken: string, text: string) => Promise<void>;
+  onImageReceived: (userId: string, contextToken: string, data: Buffer, mimeType: string) => Promise<void>;
   sendTyping: (userId: string, contextToken: string) => Promise<void>;
 }
 
@@ -120,6 +125,7 @@ export class AcpSessionManager {
       sendTyping: () => this.opts.sendTyping(userId, contextToken),
       onThoughtFlush: (text) => this.opts.onReply(userId, contextToken, text),
       onToolProgress: (text) => this.opts.onReply(userId, contextToken, text),
+      onImageReceived: (data, mimeType) => this.opts.onImageReceived(userId, contextToken, data, mimeType),
       showThoughts: this.opts.showThoughts,
     });
 
@@ -165,6 +171,8 @@ export class AcpSessionManager {
             this.opts.onReply(session.userId, pending.contextToken, text),
           onToolProgress: (text) =>
             this.opts.onReply(session.userId, pending.contextToken, text),
+          onImageReceived: (data, mimeType) =>
+            this.opts.onImageReceived(session.userId, pending.contextToken, data, mimeType),
         });
 
         // Reset chunks for the new turn

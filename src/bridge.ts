@@ -4,6 +4,9 @@ import {
   MediaDownloader,
 } from "@xmccln/wechat-ilink-sdk";
 import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ClaudeClient } from "./claude/client.js";
 import { SessionManager } from "./session/manager.js";
 import { AcpSessionManager } from "./acp/session-manager.js";
@@ -13,8 +16,10 @@ import {
 } from "./adapter/inbound.js";
 import { formatForWeChat, splitText } from "./adapter/outbound.js";
 import type { WeChatClaudeConfig } from "./config.js";
+import { log, logError } from "./logger.js";
 
 const WECHAT_MAX_MESSAGE_LENGTH = 4000;
+const MEDIA_TYPE_IMAGE = 1;
 
 export class WeChatClaudeBridge {
   private sdk: WeixinSDK;
@@ -67,9 +72,11 @@ export class WeChatClaudeBridge {
         idleTimeoutMs: config.session.idleTimeoutMs,
         maxConcurrentUsers: config.session.maxConcurrentUsers,
         showThoughts: config.agent.showThoughts,
-        log: (msg) => console.log(`[acp] ${msg}`),
+        log: (msg) => log("acp", msg),
         onReply: (userId, contextToken, text) =>
           this.sendReply(userId, contextToken, text),
+        onImageReceived: (userId, contextToken, data, mimeType) =>
+          this.sendImage(userId, contextToken, data, mimeType),
         sendTyping: async () => {
           // typing is best-effort
         },
@@ -78,7 +85,7 @@ export class WeChatClaudeBridge {
 
     this.sdk.onMessage((msg: WeixinMessage) => {
       if (this.debug) {
-        console.log(`\n[debug] ===== Incoming WeChat Message =====`);
+        console.log(`\n${new Date().toISOString()} [debug] ===== Incoming WeChat Message =====`);
         console.log(JSON.stringify(msg, null, 2));
         console.log(`[debug] =====================================\n`);
       }
@@ -89,7 +96,7 @@ export class WeChatClaudeBridge {
       if (msg.message_state === 1) return;
 
       this.processMessage(msg).catch((err) => {
-        console.error("[bridge] Error in processMessage:", err);
+        logError("bridge", `Error in processMessage: ${err}`);
       });
     });
   }
@@ -99,8 +106,9 @@ export class WeChatClaudeBridge {
       this.acpSessions.start();
     }
     await this.sdk.start();
-    console.log(
-      `[bridge] Started in ${this.config.mode.toUpperCase()} mode, listening for WeChat messages`
+    log(
+      "bridge",
+      `Started in ${this.config.mode.toUpperCase()} mode, listening for WeChat messages`
     );
   }
 
@@ -194,10 +202,7 @@ export class WeChatClaudeBridge {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      console.error(
-        `[bridge] Error processing message from ${userId}:`,
-        errorMessage
-      );
+      logError("bridge", `Error processing message from ${userId}: ${errorMessage}`);
       try {
         await this.sdk.sendText(
           userId,
@@ -205,7 +210,7 @@ export class WeChatClaudeBridge {
           contextToken
         );
       } catch {
-        console.error(`[bridge] Failed to send error message to ${userId}`);
+        logError("bridge", `Failed to send error message to ${userId}`);
       }
     }
   }
@@ -216,11 +221,11 @@ export class WeChatClaudeBridge {
     const userId = msg.from_user_id;
     const contextToken = msg.context_token;
     if (!userId || !contextToken) {
-      console.log(`[bridge] Skipping message: no userId or contextToken`);
+      log("bridge", "Skipping message: no userId or contextToken");
       return;
     }
 
-    console.log(`[bridge] Processing ACP message from ${userId}`);
+    log("bridge", `Processing ACP message from ${userId}`);
 
     // Handle chat commands
     const firstTextItem = msg.item_list?.find((item) => item.type === 1);
@@ -282,7 +287,6 @@ export class WeChatClaudeBridge {
         if (block.type === "text") {
           return { type: "text" as const, text: block.text };
         }
-        // Image: ACP uses { type: "image", data, mimeType }
         return {
           type: "image" as const,
           data: block.source.data,
@@ -297,10 +301,7 @@ export class WeChatClaudeBridge {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      console.error(
-        `[bridge] Error processing ACP message from ${userId}:`,
-        errorMessage
-      );
+      logError("bridge", `Error processing ACP message from ${userId}: ${errorMessage}`);
       try {
         await this.sdk.sendText(
           userId,
@@ -308,7 +309,7 @@ export class WeChatClaudeBridge {
           contextToken
         );
       } catch {
-        console.error(`[bridge] Failed to send error message to ${userId}`);
+        logError("bridge", `Failed to send error message to ${userId}`);
       }
     }
   }
@@ -324,6 +325,48 @@ export class WeChatClaudeBridge {
     const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
     for (const chunk of chunks) {
       await this.sdk.sendText(userId, chunk, contextToken);
+    }
+  }
+
+  private async sendImage(
+    userId: string,
+    contextToken: string,
+    data: Buffer,
+    mimeType: string
+  ): Promise<void> {
+    // Write buffer to a temp file, then send via SDK
+    const ext = mimeType.includes("png") ? ".png" : mimeType.includes("gif") ? ".gif" : ".jpg";
+    const tempDir = join(tmpdir(), "wechat-claude-images");
+    mkdirSync(tempDir, { recursive: true });
+    const tempPath = join(tempDir, `img_${Date.now()}${ext}`);
+
+    try {
+      writeFileSync(tempPath, data);
+      log("bridge", `Sending image to ${userId} (${data.length} bytes, ${mimeType})`);
+
+      await this.sdk.messaging.sender.sendMedia({
+        to: userId,
+        filePath: tempPath,
+        mediaType: MEDIA_TYPE_IMAGE,
+        contextToken,
+      });
+
+      log("bridge", `Image sent successfully to ${userId}`);
+    } catch (error) {
+      logError("bridge", `Failed to send image: ${error instanceof Error ? error.message : error}`);
+      await this.sdk.sendText(
+        userId,
+        "[Image generated but failed to send]",
+        contextToken
+      );
+    } finally {
+      // Cleanup temp file
+      try {
+        const { unlinkSync } = await import("node:fs");
+        unlinkSync(tempPath);
+      } catch {
+        // best effort
+      }
     }
   }
 }

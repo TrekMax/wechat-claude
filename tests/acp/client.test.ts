@@ -7,6 +7,7 @@ describe("AcpClient", () => {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush: vi.fn().mockResolvedValue(undefined),
       onToolProgress: vi.fn().mockResolvedValue(undefined),
+      onImageReceived: vi.fn().mockResolvedValue(undefined),
       showThoughts: opts?.showThoughts ?? false,
     });
   }
@@ -91,6 +92,7 @@ describe("AcpClient", () => {
       sendTyping,
       onThoughtFlush: vi.fn().mockResolvedValue(undefined),
       onToolProgress: vi.fn().mockResolvedValue(undefined),
+      onImageReceived: vi.fn().mockResolvedValue(undefined),
       showThoughts: false,
     });
 
@@ -114,6 +116,7 @@ describe("AcpClient", () => {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush: vi.fn().mockResolvedValue(undefined),
       onToolProgress,
+      onImageReceived: vi.fn().mockResolvedValue(undefined),
       showThoughts: false,
     });
 
@@ -134,6 +137,7 @@ describe("AcpClient", () => {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush,
       onToolProgress: vi.fn().mockResolvedValue(undefined),
+      onImageReceived: vi.fn().mockResolvedValue(undefined),
       showThoughts: true,
     });
 
@@ -156,6 +160,7 @@ describe("AcpClient", () => {
     const client = new AcpClient({
       sendTyping: vi.fn().mockResolvedValue(undefined),
       onToolProgress: vi.fn().mockResolvedValue(undefined),
+      onImageReceived: vi.fn().mockResolvedValue(undefined),
       onThoughtFlush,
       showThoughts: false,
     });
