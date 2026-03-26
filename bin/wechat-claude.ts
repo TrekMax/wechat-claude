@@ -153,15 +153,23 @@ async function getToken(): Promise<string> {
   });
   const qrAuth = new QrAuthProvider(apiClient, config.wechat.botType);
 
-  qrAuth.on("qrcode", (...args: unknown[]) => {
-    const data = args[0] as { qrUrl?: string } | undefined;
-    const qrUrl = data?.qrUrl;
+  // Import qrcode-terminal ahead of time
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let renderQr: any = null;
+  try {
+    const mod = await import("qrcode-terminal");
+    renderQr = (mod as any).default?.generate ?? (mod as any).generate;
+  } catch {
+    // fallback to printing URL
+  }
+
+  qrAuth.on("qr_generated", (...args: unknown[]) => {
+    const data = args[0] as { url?: string; sessionKey?: string } | undefined;
+    const qrUrl = data?.url;
     if (!qrUrl) return;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const qrTerminal = require("qrcode-terminal");
-      qrTerminal.generate(qrUrl, { small: true });
-    } catch {
+    if (renderQr) {
+      renderQr(qrUrl, { small: true });
+    } else {
       console.log(`\nScan this URL with WeChat:\n${qrUrl}\n`);
     }
     console.log("Waiting for QR code scan...");
