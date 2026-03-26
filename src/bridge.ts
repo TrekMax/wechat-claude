@@ -6,8 +6,8 @@ import {
   ApiEndpoints,
 } from "@xmccln/wechat-ilink-sdk";
 import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
-import { writeFileSync, mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync, unlinkSync, existsSync } from "node:fs";
+import { join, extname } from "node:path";
 import { tmpdir } from "node:os";
 import { ClaudeClient } from "./claude/client.js";
 import { SessionManager } from "./session/manager.js";
@@ -400,10 +400,79 @@ export class WeChatClaudeBridge {
       log("debug", `===== End reply (${text.length} chars) =====`);
     }
 
+    // Detect local image file paths in the reply and send them
+    const imagePaths = this.extractImagePaths(text);
+    for (const imgPath of imagePaths) {
+      await this.sendLocalFile(userId, contextToken, imgPath);
+    }
+
     const formatted = formatForWeChat(text);
     const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
     for (const chunk of chunks) {
       await this.sdk.sendText(userId, chunk, contextToken);
+    }
+  }
+
+  private static readonly IMAGE_EXTENSIONS = new Set([
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+  ]);
+
+  private static readonly MEDIA_EXTENSIONS: Record<string, number> = {
+    // Images
+    ".png": 1, ".jpg": 1, ".jpeg": 1, ".gif": 1, ".webp": 1, ".bmp": 1,
+    // Videos
+    ".mp4": 2, ".mov": 2, ".avi": 2, ".mkv": 2,
+    // Files (everything else)
+  };
+
+  /**
+   * Extract local file paths pointing to images/media from agent reply text.
+   * Looks for absolute paths like /Users/xxx/file.png
+   */
+  private extractImagePaths(text: string): string[] {
+    // Match absolute paths with known media extensions
+    const pathPattern = /(\/[^\s`"'<>|*?\n]+\.(?:png|jpg|jpeg|gif|webp|bmp|mp4|mov))/gi;
+    const matches = text.match(pathPattern) || [];
+
+    // Deduplicate and filter to existing files
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const match of matches) {
+      // Clean trailing punctuation
+      const cleaned = match.replace(/[)}\],:;.]+$/, "");
+      if (!seen.has(cleaned) && existsSync(cleaned)) {
+        seen.add(cleaned);
+        result.push(cleaned);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Send a local file (image/video) to WeChat user via iLink protocol.
+   */
+  private async sendLocalFile(
+    userId: string,
+    contextToken: string,
+    filePath: string
+  ): Promise<void> {
+    const ext = extname(filePath).toLowerCase();
+    const mediaType = WeChatClaudeBridge.MEDIA_EXTENSIONS[ext] ?? 3; // default to FILE
+
+    try {
+      log("bridge", `Sending file to ${userId}: ${filePath} (type=${mediaType})`);
+      await this.sdk.messaging.sender.sendMedia({
+        to: userId,
+        filePath,
+        mediaType,
+        contextToken,
+      });
+      log("bridge", `File sent to ${userId}: ${filePath}`);
+    } catch (error) {
+      logError(
+        "bridge",
+        `Failed to send file ${filePath}: ${error instanceof Error ? error.message : error}`
+      );
     }
   }
 
