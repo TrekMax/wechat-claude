@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { WeChatClaudeBridge } from "../src/bridge.js";
 import { loadConfig, type WeChatClaudeConfig, type BridgeMode } from "../src/config.js";
 import { resolveAgent, BUILT_IN_AGENTS } from "../src/acp/types.js";
+import { login, loadToken } from "../src/auth.js";
 
 // -- Parse CLI args ----------------------------------------------------------
 
@@ -91,22 +90,12 @@ if (mode === "api") {
   if (flags.maxTokens) claudeOverrides.maxTokens = parseInt(flags.maxTokens, 10);
   if (flags.systemPrompt) claudeOverrides.systemPrompt = flags.systemPrompt;
   if (Object.keys(claudeOverrides).length > 0) overrides.claude = claudeOverrides;
-} else {
-  // ACP mode — resolve agent preset
-  const resolved = resolveAgent(flags.agent!);
-  overrides.agent = {
-    command: resolved.command,
-    args: resolved.args as unknown as string,
-    cwd: flags.cwd ?? process.cwd(),
-    showThoughts: flags.showThoughts,
-  } as unknown as DeepPartial<WeChatClaudeConfig["agent"]>;
 }
 
 let config: WeChatClaudeConfig;
 try {
   config = loadConfig(overrides);
 
-  // For ACP mode, directly set args array (DeepPartial loses array typing)
   if (mode === "acp" && flags.agent) {
     const resolved = resolveAgent(flags.agent);
     config.agent.command = resolved.command;
@@ -122,71 +111,48 @@ try {
   process.exit(1);
 }
 
+// -- QR rendering helper -----------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let renderQr: ((url: string) => void) | null = null;
+try {
+  const mod = await import("qrcode-terminal");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const generate = (mod as any).default?.generate ?? (mod as any).generate;
+  if (typeof generate === "function") {
+    renderQr = (url: string) => {
+      generate(url, { small: true }, (qr: string) => {
+        console.log(qr);
+      });
+    };
+  }
+} catch {
+  // fallback: will print URL as text
+}
+
 // -- Token management --------------------------------------------------------
 
 const storageDir = config.storage.dir;
-const tokenFile = join(storageDir, "token.json");
-
-if (!existsSync(storageDir)) {
-  mkdirSync(storageDir, { recursive: true });
-}
 
 async function getToken(): Promise<string> {
-  if (!flags.login && existsSync(tokenFile)) {
-    try {
-      const saved = JSON.parse(readFileSync(tokenFile, "utf-8"));
-      if (saved.token) {
-        console.log("[auth] Using saved token");
-        return saved.token;
-      }
-    } catch {
-      // proceed to QR login
+  // Try loading saved token
+  if (!flags.login) {
+    const saved = loadToken(storageDir);
+    if (saved) {
+      console.log("[auth] Using saved token");
+      return saved.token;
     }
   }
 
-  console.log("[auth] Starting QR code login...");
-
-  const { QrAuthProvider, ApiClient } = await import("@xmccln/wechat-ilink-sdk");
-  const apiClient = new ApiClient({
+  // QR login
+  const tokenData = await login({
     baseUrl: config.wechat.baseUrl,
-    cdnBaseUrl: config.wechat.cdnBaseUrl,
-  });
-  const qrAuth = new QrAuthProvider(apiClient, config.wechat.botType);
-
-  // Import qrcode-terminal ahead of time
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let renderQr: any = null;
-  try {
-    const mod = await import("qrcode-terminal");
-    renderQr = (mod as any).default?.generate ?? (mod as any).generate;
-  } catch {
-    // fallback to printing URL
-  }
-
-  qrAuth.on("qr_generated", (...args: unknown[]) => {
-    const data = args[0] as { url?: string; sessionKey?: string } | undefined;
-    const qrUrl = data?.url;
-    if (!qrUrl) return;
-    if (renderQr) {
-      renderQr(qrUrl, { small: true }, (qr: string) => {
-        console.log(qr);
-      });
-    } else {
-      console.log(`\nScan this URL with WeChat:\n${qrUrl}\n`);
-    }
-    console.log("Waiting for QR code scan...");
+    botType: config.wechat.botType,
+    storageDir,
+    renderQr: renderQr ?? undefined,
   });
 
-  const authResult = await qrAuth.authenticate();
-  const token = authResult.token;
-
-  writeFileSync(
-    tokenFile,
-    JSON.stringify({ token, savedAt: new Date().toISOString() })
-  );
-  console.log("[auth] Token saved");
-
-  return token;
+  return tokenData.token;
 }
 
 // -- Main --------------------------------------------------------------------
