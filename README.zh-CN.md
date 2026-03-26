@@ -40,6 +40,17 @@ npm run dev -- --agent claude
 | `/new` | 同 `/reset` |
 | `/clear` | 同 `/reset` |
 
+### 多任务并行（ACP 模式）
+
+| 指令 | 说明 |
+|------|------|
+| `/task new [描述]` | 新建并行任务 |
+| `/task list` | 查看所有活跃任务 |
+| `/task <id>` | 切换当前任务 |
+| `/task end [id]` | 结束任务 |
+
+同时运行多个智能体任务，每个任务拥有独立的 Claude 上下文。
+
 ## 配置说明
 
 完整配置参考请查看 [docs/usage.zh-CN.md](docs/usage.zh-CN.md)。

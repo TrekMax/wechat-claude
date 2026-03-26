@@ -52,7 +52,7 @@ wechat-claude/
 │   ├── acp/                    # ACP 模式模块
 │   │   ├── client.ts           # ACP 客户端（消息块累积、权限自动审批）
 │   │   ├── agent-manager.ts    # 智能体子进程启动与销毁
-│   │   ├── session-manager.ts  # 单用户智能体进程生命周期管理
+│   │   ├── session-manager.ts  # 多任务并行智能体管理
 │   │   └── types.ts            # 智能体预设与解析
 │   └── session/
 │       ├── manager.ts          # 多用户会话管理（API 模式）
@@ -149,9 +149,22 @@ WeixinSDK.onMessage()
 - 滑动窗口：超过 `maxTurns` 时，按**对话对**删除最早的记录以保持上下文连贯
 - `reset()` 清空所有历史
 
+### ACP 会话管理器（`acp/session-manager.ts`）
+
+管理 ACP 模式下的多任务并行执行：
+
+- `Map<userId, UserTaskGroup>` — 每个用户可以同时运行多个任务
+- 每个任务是独立的智能体子进程，拥有独立的 ACP 会话和消息队列
+- **任务指令**：`/task new`、`/task list`、`/task <id>`、`/task end`
+- 消息路由到用户当前激活的任务
+- 多任务运行时，回复自动带 `[Task #N]` 前缀
+- **空闲清理**：超过 `idleTimeoutMs` 未活跃的任务自动清理
+- **容量淘汰**：达到上限时淘汰最久空闲的任务
+- 不使用 `/task` 命令时，行为与原有单会话模式完全一致（自动创建默认任务）
+
 ### 会话管理器（`session/manager.ts`）
 
-管理多个并发用户的会话：
+管理多个并发用户的会话（API 模式）：
 
 - `Map<userId, UserSession>` 存储对话和元数据
 - **LRU 淘汰**：达到容量上限时，淘汰最久未活跃的用户

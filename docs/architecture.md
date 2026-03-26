@@ -52,7 +52,7 @@ wechat-claude/
 │   ├── acp/                    # ACP mode modules
 │   │   ├── client.ts           # ACP Client (chunk accumulation, permissions)
 │   │   ├── agent-manager.ts    # Agent subprocess spawning/killing
-│   │   ├── session-manager.ts  # Per-user agent process management
+│   │   ├── session-manager.ts  # Per-user multi-task agent management
 │   │   └── types.ts            # Agent presets and resolution
 │   └── session/
 │       ├── manager.ts          # Multi-user session management (API mode)
@@ -149,9 +149,22 @@ Manages per-user conversation history:
 - Sliding window: when exceeding `maxTurns`, removes oldest **pair** to maintain coherence
 - `reset()` clears all history
 
+### ACP Session Manager (`acp/session-manager.ts`)
+
+Manages multi-task parallel execution for ACP mode:
+
+- `Map<userId, UserTaskGroup>` — each user can have multiple concurrent tasks
+- Each task is an independent agent subprocess with its own ACP session and message queue
+- **Task commands**: `/task new`, `/task list`, `/task <id>`, `/task end`
+- Messages are routed to the user's active task
+- When multiple tasks exist, replies are prefixed with `[Task #N]`
+- **Idle cleanup**: tasks inactive > `idleTimeoutMs` are automatically cleaned up
+- **Eviction**: oldest idle task is evicted when hitting capacity limits
+- Without `/task` commands, behaves identically to single-session mode (default task auto-created)
+
 ### Session Manager (`session/manager.ts`)
 
-Manages multiple concurrent user sessions:
+Manages multiple concurrent user sessions (API mode):
 
 - `Map<userId, UserSession>` with conversation + metadata
 - **LRU eviction**: when at capacity, evicts least recently active user

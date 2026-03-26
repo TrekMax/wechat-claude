@@ -308,10 +308,13 @@ export class WeChatClaudeBridge {
       if (this.config.mode === "acp") {
         const model = this.acpSessions!.getModel();
         const hasSession = this.acpSessions!.hasSession(userId);
+        const { tasks, activeTaskId } = this.acpSessions!.listTasks(userId);
         const lines = [
           `模式 / Mode: ACP`,
           `模型 / Model: ${model}`,
           `会话 / Session: ${hasSession ? "活跃中（复用）/ active" : "无（下条消息创建）/ none"}`,
+          `任务数 / Tasks: ${tasks.length}`,
+          `当前任务 / Active task: ${activeTaskId > 0 ? `#${activeTaskId}` : "无 / none"}`,
           `Debug: ${this.debug ? "开启 ON" : "关闭 OFF"}`,
         ];
         await this.reply(userId, contextToken, lines.join("\n"));
@@ -337,6 +340,12 @@ export class WeChatClaudeBridge {
         );
         return true;
       }
+
+      // /task commands for multi-task parallel support
+      if (cmd === "/task") {
+        await this.handleTaskCommand(userId, contextToken, parts.slice(1), text);
+        return true;
+      }
     }
 
     // /help
@@ -347,6 +356,12 @@ export class WeChatClaudeBridge {
       lines.push("/status — 查看状态 / Session info");
       if (this.config.mode === "acp") {
         lines.push("/show-thoughts — 切换思考过程 / Toggle thinking");
+        lines.push("");
+        lines.push("多任务并行 / Multi-task:");
+        lines.push("/task new [描述] — 新建并行任务 / Create parallel task");
+        lines.push("/task list — 查看所有任务 / List tasks");
+        lines.push("/task <id> — 切换当前任务 / Switch task");
+        lines.push("/task end [id] — 结束任务 / End task");
       }
       lines.push("/debug [on|off] — 调试模式 / Debug mode");
       lines.push("/help — 帮助 / Help");
@@ -355,6 +370,140 @@ export class WeChatClaudeBridge {
     }
 
     return false;
+  }
+
+  // -- Task commands (ACP multi-task) --
+
+  private async handleTaskCommand(
+    userId: string,
+    contextToken: string,
+    args: string[],
+    rawText: string
+  ): Promise<void> {
+    const sub = args[0];
+
+    // /task new [description]
+    if (sub === "new" || sub === "create") {
+      // Extract description from original text to preserve casing
+      const descMatch = rawText.match(/\/task\s+(?:new|create)\s+(.*)/i);
+      const description = descMatch?.[1]?.trim() || "";
+      try {
+        const taskId = await this.acpSessions!.createNewTask(
+          userId,
+          contextToken,
+          description
+        );
+        await this.reply(
+          userId,
+          contextToken,
+          `新任务 #${taskId} 已创建${description ? `：${description}` : ""}，已切换为当前任务。\nTask #${taskId} created${description ? `: ${description}` : ""}, now active.`
+        );
+      } catch (err) {
+        await this.reply(
+          userId,
+          contextToken,
+          `创建任务失败 / Failed to create task: ${String(err)}`
+        );
+      }
+      return;
+    }
+
+    // /task list
+    if (sub === "list" || sub === "ls") {
+      const { tasks, activeTaskId } = this.acpSessions!.listTasks(userId);
+      if (tasks.length === 0) {
+        await this.reply(
+          userId,
+          contextToken,
+          "暂无活跃任务，发送消息会自动创建。\nNo active tasks. Send a message to start one."
+        );
+        return;
+      }
+
+      const lines = [`任务列表 / Tasks (共 ${tasks.length} 个):`];
+      for (const t of tasks) {
+        const active = t.taskId === activeTaskId ? " ← 当前/active" : "";
+        const status = t.processing ? "处理中/running" : "空闲/idle";
+        const queue = t.queueLength > 0 ? ` (队列: ${t.queueLength})` : "";
+        lines.push(`#${t.taskId} [${status}] ${t.description}${queue}${active}`);
+      }
+      lines.push("");
+      lines.push("切换: /task <id>  |  新建: /task new  |  结束: /task end [id]");
+      await this.reply(userId, contextToken, lines.join("\n"));
+      return;
+    }
+
+    // /task end [id]
+    if (sub === "end" || sub === "kill" || sub === "stop" || sub === "close") {
+      const targetId = args[1] ? parseInt(args[1], 10) : undefined;
+      if (args[1] && isNaN(targetId!)) {
+        await this.reply(userId, contextToken, "无效的任务 ID / Invalid task ID");
+        return;
+      }
+      const ended = this.acpSessions!.endTask(userId, targetId);
+      if (ended > 0) {
+        const activeId = this.acpSessions!.getActiveTaskId(userId);
+        const switchMsg = activeId > 0
+          ? `当前任务切换为 #${activeId} / Switched to #${activeId}`
+          : "无剩余任务 / No remaining tasks";
+        await this.reply(
+          userId,
+          contextToken,
+          `任务 #${ended} 已结束。${switchMsg}\nTask #${ended} ended. ${switchMsg}`
+        );
+      } else {
+        await this.reply(userId, contextToken, "未找到该任务 / Task not found");
+      }
+      return;
+    }
+
+    // /task <id> — switch task
+    if (sub && /^\d+$/.test(sub)) {
+      const taskId = parseInt(sub, 10);
+      const ok = this.acpSessions!.switchTask(userId, taskId);
+      if (ok) {
+        await this.reply(
+          userId,
+          contextToken,
+          `已切换到任务 #${taskId}，后续消息将发送到此任务。\nSwitched to task #${taskId}.`
+        );
+      } else {
+        await this.reply(
+          userId,
+          contextToken,
+          `任务 #${taskId} 不存在。使用 /task list 查看所有任务。\nTask #${taskId} not found. Use /task list.`
+        );
+      }
+      return;
+    }
+
+    // /task (no args) — show current task info
+    if (!sub) {
+      const { tasks, activeTaskId } = this.acpSessions!.listTasks(userId);
+      if (tasks.length === 0) {
+        await this.reply(
+          userId,
+          contextToken,
+          "暂无活跃任务。发送 /task new 创建新任务。\nNo active tasks. Use /task new to create one."
+        );
+      } else {
+        const active = tasks.find((t) => t.taskId === activeTaskId);
+        const status = active?.processing ? "处理中/running" : "空闲/idle";
+        await this.reply(
+          userId,
+          contextToken,
+          `当前任务 / Current: #${activeTaskId} [${status}] ${active?.description ?? ""}\n共 ${tasks.length} 个任务 / ${tasks.length} total tasks\n\n/task list 查看全部 | /task new 新建`
+        );
+      }
+      return;
+    }
+
+    // Unknown subcommand
+    await this.reply(
+      userId,
+      contextToken,
+      "用法 / Usage:\n/task new [描述] — 新建任务\n/task list — 查看任务\n/task <id> — 切换任务\n/task end [id] — 结束任务"
+    );
   }
 
   // -- API mode --

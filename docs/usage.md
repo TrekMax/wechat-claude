@@ -145,6 +145,35 @@ If WeChat provides a transcription, it will be forwarded to Claude as text. Othe
 | `/new` | Same as `/reset` |
 | `/clear` | Same as `/reset` |
 
+### Multi-Task Parallel (ACP mode)
+
+In ACP mode, you can run multiple agent tasks concurrently. Each task gets its own independent agent subprocess and Claude context, so they don't block each other.
+
+| Command | Effect |
+|---------|--------|
+| `/task new [description]` | Create a new parallel task and switch to it |
+| `/task list` | List all active tasks with status |
+| `/task <id>` | Switch to a specific task (future messages go there) |
+| `/task end [id]` | End a task (current if no id specified) |
+| `/task` | Show current task info |
+
+**Example workflow:**
+
+```
+You: /task new Design an API            → Creates task #1, starts agent
+You: (task #1 is working...)
+You: /task new Fix the login bug         → Creates task #2, starts another agent in parallel
+You: /task list                          → Shows both tasks and their status
+You: /task 1                             → Switch back to task #1
+You: How's the progress?                 → Sent to task #1
+You: /task 2                             → Switch to task #2
+You: Add error handling                  → Sent to task #2
+```
+
+When you have multiple tasks running, replies are prefixed with `[Task #N]` so you can tell which task responded.
+
+Without using `/task` commands, the system works exactly as before — a single default task is created automatically.
+
 ### Conversation History
 
 - Each user has an independent conversation with Claude

@@ -42,6 +42,17 @@ Scan the QR code with WeChat. Once logged in, send a message to your bot account
 | `/new` | Same as `/reset` |
 | `/clear` | Same as `/reset` |
 
+### Multi-Task Parallel (ACP mode)
+
+| Command | Description |
+|---------|-------------|
+| `/task new [desc]` | Create a new parallel task |
+| `/task list` | List all active tasks |
+| `/task <id>` | Switch active task |
+| `/task end [id]` | End a task |
+
+Run multiple agent tasks concurrently — each gets its own independent Claude context.
+
 ## Configuration
 
 See [docs/usage.md](docs/usage.md) for full configuration reference.
