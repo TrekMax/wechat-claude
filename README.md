@@ -1,5 +1,7 @@
 # wechat-claude
 
+[中文文档](README.zh-CN.md)
+
 WeChat-to-Claude bridge via iLink protocol. Send messages to your WeChat bot, get responses from Claude.
 
 ## Features
