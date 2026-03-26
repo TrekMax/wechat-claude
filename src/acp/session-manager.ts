@@ -144,7 +144,7 @@ export class AcpSessionManager {
     } catch {
       // ignore
     }
-    return "default";
+    return "sonnet (默认 / default)";
   }
 
   /** Switch model — writes to .claude/settings.json and restarts session */
