@@ -1,0 +1,187 @@
+# Architecture
+
+## Overview
+
+wechat-claude is a bridge that connects WeChat messaging (via iLink protocol) to the Claude API. It receives messages from WeChat users, forwards them to Claude, and sends Claude's responses back.
+
+```
++------------------+       +------------------+       +------------------+
+|                  |       |                  |       |                  |
+|  WeChat Client   | <---> |  wechat-claude   | <---> |   Claude API     |
+|  (User's phone)  |       |    (Bridge)      |       |  (Anthropic)     |
+|                  |       |                  |       |                  |
++------------------+       +------------------+       +------------------+
+        ^                         |
+        |                         v
+   iLink Protocol          @anthropic-ai/sdk
+   (Long-polling)           (HTTPS REST)
+```
+
+## Module Structure
+
+```
+wechat-claude/
+├── bin/
+│   └── wechat-claude.ts        # CLI entry point
+├── src/
+│   ├── index.ts                # Public API exports
+│   ├── config.ts               # Configuration loading and validation
+│   ├── bridge.ts               # Core orchestrator
+│   ├── adapter/
+│   │   ├── inbound.ts          # WeChat → Claude content conversion
+│   │   └── outbound.ts         # Claude → WeChat text formatting
+│   ├── claude/
+│   │   ├── client.ts           # Anthropic SDK wrapper
+│   │   ├── conversation.ts     # Per-user conversation history
+│   │   └── types.ts            # Claude-specific type definitions
+│   └── session/
+│       ├── manager.ts          # Multi-user session management
+│       └── types.ts            # Session type definitions
+└── tests/                      # Mirror of src/ structure
+```
+
+## Core Components
+
+### Bridge (`bridge.ts`)
+
+The central orchestrator. It owns all other components and coordinates the message flow:
+
+1. Receives WeChat message via SDK callback
+2. Checks for reset commands
+3. Converts message to Claude content blocks (inbound adapter)
+4. Retrieves/creates user session
+5. Appends to conversation history
+6. Calls Claude API with full history
+7. Formats response (outbound adapter)
+8. Sends response back via WeChat SDK
+
+```
+WeixinSDK.onMessage()
+    │
+    ▼
+┌─────────────────────┐
+│ Check reset command  │──yes──► Reset session, send confirmation
+└─────────┬───────────┘
+          │ no
+          ▼
+┌─────────────────────┐
+│ Inbound adapter     │  Convert WeChat msg → Claude content blocks
+│ (text/image/voice)  │  Images: download → decrypt → base64
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│ Session manager     │  Get or create session for this user
+│ + Conversation      │  Append user message to history
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│ Claude client       │  Send full conversation to Anthropic API
+│ (@anthropic-ai/sdk) │  Receive response
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│ Outbound adapter    │  Strip markdown, split into chunks
+└─────────┬───────────┘
+          ▼
+    WeixinSDK.sendText()
+```
+
+### Inbound Adapter (`adapter/inbound.ts`)
+
+Converts WeChat `WeixinMessage` (with `item_list: MessageItem[]`) into Claude API content blocks:
+
+| WeChat Item Type | Claude Content Block |
+|-----------------|---------------------|
+| TEXT (1) | `{ type: "text", text: "..." }` |
+| IMAGE (2) | `{ type: "image", source: { type: "base64", ... } }` |
+| VOICE (3) | `{ type: "text", text: "[Voice transcription]: ..." }` |
+| FILE (4) | `{ type: "text", text: "[File received: filename]" }` |
+| VIDEO (5) | `{ type: "text", text: "[Video received]" }` |
+
+Image handling flow:
+1. `MediaDownloader` downloads encrypted image from WeChat CDN
+2. AES-128-ECB decryption (handled by SDK)
+3. Read file into Buffer
+4. Encode as base64
+5. Wrap in Claude `ImageBlockParam` with correct `media_type`
+
+### Outbound Adapter (`adapter/outbound.ts`)
+
+Two pure functions:
+
+- **`formatForWeChat(text)`** — Strips markdown (bold, italic, code blocks, headers, links) since WeChat doesn't render it
+- **`splitText(text, maxLength)`** — Splits into chunks of 4000 chars (WeChat limit), preferring newline boundaries
+
+### Claude Client (`claude/client.ts`)
+
+Thin wrapper around `@anthropic-ai/sdk`:
+
+- Accepts `ConversationTurn[]` (role + content blocks)
+- Maps to Anthropic `MessageParam[]` with proper typing
+- Returns `ClaudeResponse` with text, token usage, and stop reason
+- Supports `temperature` override
+
+### Conversation (`claude/conversation.ts`)
+
+Manages per-user conversation history:
+
+- Stores `ConversationTurn[]` (user/assistant pairs)
+- Sliding window: when exceeding `maxTurns`, removes oldest **pair** to maintain coherence
+- `reset()` clears all history
+
+### Session Manager (`session/manager.ts`)
+
+Manages multiple concurrent user sessions:
+
+- `Map<userId, UserSession>` with conversation + metadata
+- **LRU eviction**: when at capacity, evicts least recently active user
+- **Idle cleanup**: periodic timer removes sessions inactive > `idleTimeoutMs`
+- **Reset detection**: matches user text against configurable keywords
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `@xmccln/wechat-ilink-sdk` | WeChat iLink protocol (auth, messaging, media encryption) |
+| `@anthropic-ai/sdk` | Claude API client |
+| `qrcode-terminal` | QR code rendering for terminal login |
+
+## Security Considerations
+
+- **API key**: Loaded exclusively from `ANTHROPIC_API_KEY` env var, never stored in config files
+- **Token storage**: WeChat auth token saved to `~/.wechat-claude/token.json` with restrictive scope
+- **Media encryption**: Image downloads use AES-128-ECB decryption (handled by SDK), temp files cleaned up after use
+- **No secrets in code**: `.env` file is in `.gitignore`
+
+## Data Flow
+
+```
+                     ┌──────────────────┐
+                     │  WeChat Server   │
+                     │ ilinkai.weixin.  │
+                     │    qq.com        │
+                     └────────┬─────────┘
+                              │
+                    Long-poll (35s timeout)
+                    POST /ilink/bot/getupdates
+                              │
+                              ▼
+                     ┌──────────────────┐
+                     │   WeixinSDK      │
+                     │  (iLink SDK)     │
+                     └────────┬─────────┘
+                              │
+                         onMessage()
+                              │
+                              ▼
+                     ┌──────────────────┐
+                     │     Bridge       │
+                     └───┬──────────┬───┘
+                         │          │
+              ┌──────────▼──┐  ┌────▼──────────┐
+              │   Session   │  │  Claude Client │
+              │   Manager   │  │  (Anthropic)   │
+              └─────────────┘  └───────────────┘
+```
+
+No streaming is used — Claude API calls are non-streaming because WeChat iLink only supports sending complete messages (state = `FINISH`).
