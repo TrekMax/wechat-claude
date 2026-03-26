@@ -2,9 +2,11 @@ import {
   WeixinSDK,
   TokenAuthProvider,
   MediaDownloader,
+  ApiClient,
+  ApiEndpoints,
 } from "@xmccln/wechat-ilink-sdk";
 import type { WeixinMessage } from "@xmccln/wechat-ilink-sdk";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ClaudeClient } from "./claude/client.js";
@@ -20,12 +22,20 @@ import { log, logError } from "./logger.js";
 
 const WECHAT_MAX_MESSAGE_LENGTH = 4000;
 const MEDIA_TYPE_IMAGE = 1;
+const TYPING_TICKET_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 export class WeChatClaudeBridge {
   private sdk: WeixinSDK;
   private config: WeChatClaudeConfig;
   private mediaDownloader: MediaDownloader;
+  private apiEndpoints: ApiEndpoints;
   private debug: boolean;
+
+  // Typing indicator cache
+  private typingTickets = new Map<
+    string,
+    { ticket: string; expiresAt: number }
+  >();
 
   // API mode
   private claude?: ClaudeClient;
@@ -48,6 +58,14 @@ export class WeChatClaudeBridge {
     });
 
     this.mediaDownloader = new MediaDownloader(config.wechat.cdnBaseUrl);
+
+    // Create ApiEndpoints for typing indicators
+    const apiClient = new ApiClient({
+      baseUrl: config.wechat.baseUrl,
+      cdnBaseUrl: config.wechat.cdnBaseUrl,
+    });
+    apiClient.setAuthToken(token);
+    this.apiEndpoints = new ApiEndpoints(apiClient);
 
     if (config.mode === "api") {
       this.claude = new ClaudeClient({
@@ -77,15 +95,16 @@ export class WeChatClaudeBridge {
           this.sendReply(userId, contextToken, text),
         onImageReceived: (userId, contextToken, data, mimeType) =>
           this.sendImage(userId, contextToken, data, mimeType),
-        sendTyping: async () => {
-          // typing is best-effort
-        },
+        sendTyping: (userId, contextToken) =>
+          this.sendTypingIndicator(userId, contextToken),
       });
     }
 
     this.sdk.onMessage((msg: WeixinMessage) => {
       if (this.debug) {
-        console.log(`\n${new Date().toISOString()} [debug] ===== Incoming WeChat Message =====`);
+        console.log(
+          `\n${new Date().toISOString()} [debug] ===== Incoming WeChat Message =====`
+        );
         console.log(JSON.stringify(msg, null, 2));
         console.log(`[debug] =====================================\n`);
       }
@@ -129,6 +148,70 @@ export class WeChatClaudeBridge {
     }
   }
 
+  // -- Typing indicators --
+
+  private async getTypingTicket(
+    userId: string,
+    contextToken: string
+  ): Promise<string | null> {
+    const cached = this.typingTickets.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.ticket;
+    }
+
+    try {
+      const resp = await this.apiEndpoints.getConfig({
+        ilink_user_id: userId,
+        context_token: contextToken,
+      });
+      const ticket = resp.typing_ticket;
+      if (ticket) {
+        this.typingTickets.set(userId, {
+          ticket,
+          expiresAt: Date.now() + TYPING_TICKET_TTL_MS,
+        });
+        return ticket;
+      }
+    } catch {
+      // best effort
+    }
+    return null;
+  }
+
+  private async sendTypingIndicator(
+    userId: string,
+    contextToken: string
+  ): Promise<void> {
+    try {
+      const ticket = await this.getTypingTicket(userId, contextToken);
+      if (!ticket) return;
+      await this.apiEndpoints.sendTyping({
+        ilink_user_id: userId,
+        typing_ticket: ticket,
+        status: 1, // TYPING
+      });
+    } catch {
+      // typing is best-effort
+    }
+  }
+
+  private async cancelTypingIndicator(
+    userId: string,
+    contextToken: string
+  ): Promise<void> {
+    try {
+      const ticket = await this.getTypingTicket(userId, contextToken);
+      if (!ticket) return;
+      await this.apiEndpoints.sendTyping({
+        ilink_user_id: userId,
+        typing_ticket: ticket,
+        status: 2, // CANCEL
+      });
+    } catch {
+      // best effort
+    }
+  }
+
   // -- API mode --
 
   private async processApiMessage(msg: WeixinMessage): Promise<void> {
@@ -147,7 +230,7 @@ export class WeChatClaudeBridge {
           this.sessions!.resetSession(userId);
           await this.sdk.sendText(
             userId,
-            "Conversation has been reset. Send me a new message to start fresh.",
+            "Conversation has been reset.",
             contextToken
           );
           return;
@@ -157,9 +240,7 @@ export class WeChatClaudeBridge {
           this.debug = !this.debug;
           await this.sdk.sendText(
             userId,
-            this.debug
-              ? "Debug mode ON. Messages will be printed to terminal."
-              : "Debug mode OFF.",
+            this.debug ? "Debug mode ON." : "Debug mode OFF.",
             contextToken
           );
           return;
@@ -168,26 +249,18 @@ export class WeChatClaudeBridge {
         if (textLower === "/help") {
           await this.sdk.sendText(
             userId,
-            "Available commands:\n" +
-              "/reset — Clear conversation history\n" +
-              "/debug — Toggle debug mode\n" +
-              "/help — Show this help message",
+            "Commands:\n/reset — Clear history\n/debug — Toggle debug\n/help — Help",
             contextToken
           );
           return;
         }
       }
 
-      const downloadImage = async (message: WeixinMessage) => {
-        const result = await this.mediaDownloader.downloadImage(message);
-        if (!result) return null;
-        const { readFileSync } = await import("node:fs");
-        const buffer = readFileSync(result.path);
-        await result.cleanup();
-        return { buffer, mimeType: result.mimeType };
-      };
+      // Send typing indicator
+      this.sendTypingIndicator(userId, contextToken).catch(() => {});
 
-      const contentBlocks = await convertToClaudeContent(msg, downloadImage);
+      const downloadMedia = this.createMediaDownloader();
+      const contentBlocks = await convertToClaudeContent(msg, downloadMedia);
       const session = this.sessions!.getOrCreateSession(userId);
       session.conversation.addUserMessage(contentBlocks);
 
@@ -198,19 +271,22 @@ export class WeChatClaudeBridge {
       );
 
       session.conversation.addAssistantMessage(response.text);
+
+      // Cancel typing before sending reply
+      this.cancelTypingIndicator(userId, contextToken).catch(() => {});
       await this.sendReply(userId, contextToken, response.text);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      logError("bridge", `Error processing message from ${userId}: ${errorMessage}`);
+      logError("bridge", `Error from ${userId}: ${errorMessage}`);
       try {
         await this.sdk.sendText(
           userId,
-          `Sorry, an error occurred. Please try again later.\n\n[error: ${errorMessage}]`,
+          `Error: ${errorMessage}`,
           contextToken
         );
       } catch {
-        logError("bridge", `Failed to send error message to ${userId}`);
+        logError("bridge", `Failed to send error to ${userId}`);
       }
     }
   }
@@ -236,9 +312,7 @@ export class WeChatClaudeBridge {
         const enabled = this.acpSessions!.toggleShowThoughts(userId);
         await this.sdk.sendText(
           userId,
-          enabled
-            ? "Thoughts enabled. You will now see the agent's thinking process."
-            : "Thoughts disabled.",
+          enabled ? "Thoughts enabled." : "Thoughts disabled.",
           contextToken
         );
         return;
@@ -248,9 +322,7 @@ export class WeChatClaudeBridge {
         this.debug = !this.debug;
         await this.sdk.sendText(
           userId,
-          this.debug
-            ? "Debug mode ON. Messages will be printed to terminal."
-            : "Debug mode OFF.",
+          this.debug ? "Debug mode ON." : "Debug mode OFF.",
           contextToken
         );
         return;
@@ -259,10 +331,7 @@ export class WeChatClaudeBridge {
       if (text === "/help") {
         await this.sdk.sendText(
           userId,
-          "Available commands:\n" +
-            "/show-thoughts — Toggle agent thinking visibility\n" +
-            "/debug — Toggle debug mode\n" +
-            "/help — Show this help message",
+          "Commands:\n/show-thoughts — Toggle thinking\n/debug — Toggle debug\n/help — Help",
           contextToken
         );
         return;
@@ -270,19 +339,9 @@ export class WeChatClaudeBridge {
     }
 
     try {
-      // Convert to ACP content blocks
-      const downloadImage = async (message: WeixinMessage) => {
-        const result = await this.mediaDownloader.downloadImage(message);
-        if (!result) return null;
-        const { readFileSync } = await import("node:fs");
-        const buffer = readFileSync(result.path);
-        await result.cleanup();
-        return { buffer, mimeType: result.mimeType };
-      };
+      const downloadMedia = this.createMediaDownloader();
+      const claudeBlocks = await convertToClaudeContent(msg, downloadMedia);
 
-      const claudeBlocks = await convertToClaudeContent(msg, downloadImage);
-
-      // Convert ClaudeContentBlock[] to ACP ContentBlock[]
       const acpBlocks = claudeBlocks.map((block: ClaudeContentBlock) => {
         if (block.type === "text") {
           return { type: "text" as const, text: block.text };
@@ -301,26 +360,46 @@ export class WeChatClaudeBridge {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      logError("bridge", `Error processing ACP message from ${userId}: ${errorMessage}`);
+      logError("bridge", `ACP error from ${userId}: ${errorMessage}`);
       try {
         await this.sdk.sendText(
           userId,
-          `Sorry, an error occurred. Please try again later.\n\n[error: ${errorMessage}]`,
+          `Error: ${errorMessage}`,
           contextToken
         );
       } catch {
-        logError("bridge", `Failed to send error message to ${userId}`);
+        logError("bridge", `Failed to send error to ${userId}`);
       }
     }
   }
 
-  // -- Shared --
+  // -- Media helpers --
+
+  private createMediaDownloader() {
+    return async (message: WeixinMessage) => {
+      // Try downloadFirstMedia to handle all media types (image, voice, video, file)
+      const result = await this.mediaDownloader.downloadFirstMedia(message);
+      if (!result) return null;
+      const { readFileSync } = await import("node:fs");
+      const buffer = readFileSync(result.path);
+      await result.cleanup();
+      return { buffer, mimeType: result.mimeType };
+    };
+  }
+
+  // -- Send helpers --
 
   private async sendReply(
     userId: string,
     contextToken: string,
     text: string
   ): Promise<void> {
+    if (this.debug) {
+      log("debug", `===== Reply to ${userId} =====`);
+      console.log(text);
+      log("debug", `===== End reply (${text.length} chars) =====`);
+    }
+
     const formatted = formatForWeChat(text);
     const chunks = splitText(formatted, WECHAT_MAX_MESSAGE_LENGTH);
     for (const chunk of chunks) {
@@ -334,15 +413,21 @@ export class WeChatClaudeBridge {
     data: Buffer,
     mimeType: string
   ): Promise<void> {
-    // Write buffer to a temp file, then send via SDK
-    const ext = mimeType.includes("png") ? ".png" : mimeType.includes("gif") ? ".gif" : ".jpg";
+    const ext = mimeType.includes("png")
+      ? ".png"
+      : mimeType.includes("gif")
+        ? ".gif"
+        : ".jpg";
     const tempDir = join(tmpdir(), "wechat-claude-images");
     mkdirSync(tempDir, { recursive: true });
     const tempPath = join(tempDir, `img_${Date.now()}${ext}`);
 
     try {
       writeFileSync(tempPath, data);
-      log("bridge", `Sending image to ${userId} (${data.length} bytes, ${mimeType})`);
+      log(
+        "bridge",
+        `Sending image to ${userId} (${data.length} bytes, ${mimeType})`
+      );
 
       await this.sdk.messaging.sender.sendMedia({
         to: userId,
@@ -351,18 +436,19 @@ export class WeChatClaudeBridge {
         contextToken,
       });
 
-      log("bridge", `Image sent successfully to ${userId}`);
+      log("bridge", `Image sent to ${userId}`);
     } catch (error) {
-      logError("bridge", `Failed to send image: ${error instanceof Error ? error.message : error}`);
+      logError(
+        "bridge",
+        `Failed to send image: ${error instanceof Error ? error.message : error}`
+      );
       await this.sdk.sendText(
         userId,
         "[Image generated but failed to send]",
         contextToken
       );
     } finally {
-      // Cleanup temp file
       try {
-        const { unlinkSync } = await import("node:fs");
         unlinkSync(tempPath);
       } catch {
         // best effort

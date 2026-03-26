@@ -1,6 +1,6 @@
 /**
  * Converts WeChat iLink messages to Claude API content blocks.
- * Uses SDK types directly — WeixinMessage has item_list with MessageItem[].
+ * Handles text, images, voice (with transcription), files, and video.
  */
 
 import type {
@@ -8,7 +8,11 @@ import type {
   MessageItem,
 } from "@xmccln/wechat-ilink-sdk";
 
-export type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+export type ImageMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
 
 export type ClaudeContentBlock =
   | { type: "text"; text: string }
@@ -60,9 +64,19 @@ function extractRefText(item: MessageItem): string {
   return "[Other message]";
 }
 
+function isTextReadable(mimeType: string): boolean {
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    mimeType === "application/xml" ||
+    mimeType === "application/javascript" ||
+    mimeType === "application/typescript"
+  );
+}
+
 export async function convertToClaudeContent(
   msg: WeixinMessage,
-  downloadImage?: MediaDownloadFn
+  downloadMedia?: MediaDownloadFn
 ): Promise<ClaudeContentBlock[]> {
   const blocks: ClaudeContentBlock[] = [];
 
@@ -77,7 +91,10 @@ export async function convertToClaudeContent(
       case ITEM_TYPE.TEXT: {
         const text = item.text_item?.text ?? "";
         if (refText) {
-          blocks.push({ type: "text", text: `[Quoting: "${refText}"]\n${text}` });
+          blocks.push({
+            type: "text",
+            text: `[Quoting: "${refText}"]\n${text}`,
+          });
         } else {
           blocks.push({ type: "text", text });
         }
@@ -85,12 +102,15 @@ export async function convertToClaudeContent(
       }
 
       case ITEM_TYPE.IMAGE: {
-        if (!downloadImage) {
-          blocks.push({ type: "text", text: "[Image received but no downloader available]" });
+        if (!downloadMedia) {
+          blocks.push({
+            type: "text",
+            text: "[Image received but no downloader available]",
+          });
           break;
         }
         try {
-          const result = await downloadImage(msg);
+          const result = await downloadMedia(msg);
           if (result) {
             blocks.push({
               type: "image",
@@ -101,10 +121,16 @@ export async function convertToClaudeContent(
               },
             });
           } else {
-            blocks.push({ type: "text", text: "[Image received but download failed]" });
+            blocks.push({
+              type: "text",
+              text: "[Image received but download failed]",
+            });
           }
         } catch {
-          blocks.push({ type: "text", text: "[Image received but download failed]" });
+          blocks.push({
+            type: "text",
+            text: "[Image received but download failed]",
+          });
         }
         break;
       }
@@ -112,21 +138,60 @@ export async function convertToClaudeContent(
       case ITEM_TYPE.VOICE: {
         const transcription = item.voice_item?.text;
         if (transcription) {
-          blocks.push({ type: "text", text: `[Voice message transcription]: ${transcription}` });
+          blocks.push({
+            type: "text",
+            text: `[Voice message transcription]: ${transcription}`,
+          });
         } else {
-          blocks.push({ type: "text", text: "[Voice message received, no transcription available]" });
+          // No transcription — note duration if available
+          const duration = item.voice_item?.playtime;
+          const durationStr = duration
+            ? ` (${Math.round(duration / 1000)}s)`
+            : "";
+          blocks.push({
+            type: "text",
+            text: `[Voice message received${durationStr}, no transcription available]`,
+          });
         }
         break;
       }
 
       case ITEM_TYPE.FILE: {
         const filename = item.file_item?.file_name || "unknown file";
-        blocks.push({ type: "text", text: `[File received: ${filename}]` });
+        const fileSize = item.file_item?.len;
+        const sizeStr = fileSize ? ` (${fileSize} bytes)` : "";
+
+        // Try to download text-readable files
+        if (downloadMedia) {
+          try {
+            const result = await downloadMedia(msg);
+            if (result && isTextReadable(result.mimeType)) {
+              const content = result.buffer.toString("utf-8");
+              blocks.push({
+                type: "text",
+                text: `[File: ${filename}${sizeStr}]\n\`\`\`\n${content}\n\`\`\``,
+              });
+              break;
+            }
+          } catch {
+            // fall through to text description
+          }
+        }
+
+        blocks.push({
+          type: "text",
+          text: `[File received: ${filename}${sizeStr}]`,
+        });
         break;
       }
 
       case ITEM_TYPE.VIDEO: {
-        blocks.push({ type: "text", text: "[Video received]" });
+        const duration = item.video_item?.play_length;
+        const durationStr = duration ? ` (${duration}s)` : "";
+        blocks.push({
+          type: "text",
+          text: `[Video received${durationStr}]`,
+        });
         break;
       }
 
@@ -135,5 +200,7 @@ export async function convertToClaudeContent(
     }
   }
 
-  return blocks.length > 0 ? blocks : [{ type: "text", text: "[Empty message]" }];
+  return blocks.length > 0
+    ? blocks
+    : [{ type: "text", text: "[Empty message]" }];
 }

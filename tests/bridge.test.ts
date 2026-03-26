@@ -34,16 +34,26 @@ vi.mock("@xmccln/wechat-ilink-sdk", () => ({
     start: mockStart,
     stop: mockStop,
     onMessage: mockOnMessage,
+    messaging: { sender: { sendMedia: vi.fn().mockResolvedValue(undefined) } },
   })),
   TokenAuthProvider: vi.fn(),
   MediaDownloader: vi.fn().mockImplementation(() => ({
     downloadImage: vi.fn().mockResolvedValue(null),
+    downloadFirstMedia: vi.fn().mockResolvedValue(null),
+  })),
+  ApiClient: vi.fn().mockImplementation(() => ({
+    setAuthToken: vi.fn(),
+  })),
+  ApiEndpoints: vi.fn().mockImplementation(() => ({
+    getConfig: vi.fn().mockResolvedValue({ typing_ticket: "test-ticket" }),
+    sendTyping: vi.fn().mockResolvedValue({}),
   })),
 }));
 
 function makeApiConfig(): WeChatClaudeConfig {
   return {
     mode: "api",
+    debug: false,
     wechat: {
       baseUrl: "https://ilinkai.weixin.qq.com",
       cdnBaseUrl: "https://novac2c.cdn.weixin.qq.com/c2c",
@@ -141,7 +151,7 @@ describe("WeChatClaudeBridge — API mode", () => {
 
     expect(mockSendText).toHaveBeenCalledWith(
       "user1",
-      expect.stringContaining("error"),
+      expect.stringContaining("Error"),
       "ctx1"
     );
   });
@@ -223,7 +233,7 @@ describe("WeChatClaudeBridge — ACP mode", () => {
 
     expect(mockSendText).toHaveBeenCalledWith(
       "user1",
-      expect.stringContaining("error"),
+      expect.stringContaining("Error"),
       "ctx1"
     );
   });
