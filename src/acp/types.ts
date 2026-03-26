@@ -8,10 +8,24 @@ export interface AgentPreset {
 
 export const BUILT_IN_AGENTS: Record<string, AgentPreset> = {
   claude: {
-    label: "Claude Code",
+    label: "Claude Code (Sonnet)",
     command: "npx",
     args: ["@zed-industries/claude-code-acp"],
-    description: "Claude Code via ACP",
+    description: "Claude Code via ACP, default model",
+  },
+  "claude-opus": {
+    label: "Claude Code (Opus)",
+    command: "npx",
+    args: ["@zed-industries/claude-code-acp"],
+    description: "Claude Code via ACP with Opus model",
+    env: { CLAUDE_CODE_USE_MODEL: "opus" },
+  },
+  "claude-haiku": {
+    label: "Claude Code (Haiku)",
+    command: "npx",
+    args: ["@zed-industries/claude-code-acp"],
+    description: "Claude Code via ACP with Haiku model (fastest)",
+    env: { CLAUDE_CODE_USE_MODEL: "haiku" },
   },
   copilot: {
     label: "GitHub Copilot",

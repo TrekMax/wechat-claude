@@ -46,7 +46,7 @@ Options:
   --show-thoughts      Show agent thinking process in chat (ACP mode)
   --debug              Print all incoming WeChat messages to terminal
   --login              Force re-login (show QR code)
-  --model <model>      Claude model to use (API mode, default: claude-sonnet-4-20250514)
+  --model <model>      Claude model (API mode: full name; ACP mode: sonnet/opus/haiku)
   --system-prompt <p>  System prompt for Claude (API mode)
   --max-tokens <n>     Max tokens for Claude response (API mode, default: 4096)
   -h, --help           Show this help message
@@ -63,6 +63,9 @@ Examples:
 
   # ACP mode — custom agent command
   wechat-claude --agent "npx my-custom-agent --acp"
+
+  # ACP mode with faster model
+  wechat-claude --agent claude --model haiku --cwd ~/projects/myapp
 
   # ACP mode with thinking visible
   wechat-claude --agent claude --show-thoughts --cwd ~/projects/myapp
@@ -104,7 +107,12 @@ try {
     config.agent.args = resolved.args;
     config.agent.cwd = flags.cwd ?? process.cwd();
     config.agent.showThoughts = flags.showThoughts;
-    if (resolved.env) config.agent.env = resolved.env;
+    config.agent.env = { ...resolved.env };
+
+    // Pass --model to ACP agent if specified
+    if (flags.model) {
+      config.agent.env.CLAUDE_CODE_USE_MODEL = flags.model;
+    }
   }
 } catch (error) {
   console.error(
