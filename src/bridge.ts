@@ -220,6 +220,107 @@ export class WeChatClaudeBridge {
     }
   }
 
+  // -- Shared command handling --
+
+  /**
+   * Handle chat commands. Returns true if message was a command (consumed).
+   */
+  private async handleCommand(
+    userId: string,
+    contextToken: string,
+    text: string
+  ): Promise<boolean> {
+    const lower = text.trim().toLowerCase();
+    const parts = lower.split(/\s+/);
+    const cmd = parts[0];
+    const arg = parts[1];
+
+    // /debug [on|off]
+    if (cmd === "/debug") {
+      if (arg === "on") this.debug = true;
+      else if (arg === "off") this.debug = false;
+      else this.debug = !this.debug;
+      await this.sdk.sendText(
+        userId,
+        this.debug ? "Debug mode ON." : "Debug mode OFF.",
+        contextToken
+      );
+      return true;
+    }
+
+    // /model [name] — view or switch model
+    if (cmd === "/model") {
+      if (this.config.mode === "acp") {
+        if (arg) {
+          this.acpSessions!.setModel(userId, arg);
+          await this.sdk.sendText(
+            userId,
+            `Model switched to: ${arg}\nSession restarted. Send a message to begin.`,
+            contextToken
+          );
+        } else {
+          const current = this.acpSessions!.getModel();
+          await this.sdk.sendText(
+            userId,
+            `Current model: ${current}\n\nSwitch with:\n/model sonnet\n/model haiku\n/model opus`,
+            contextToken
+          );
+        }
+      } else {
+        await this.sdk.sendText(
+          userId,
+          `Current model: ${this.config.claude.model}\n(API mode — restart with --model to change)`,
+          contextToken
+        );
+      }
+      return true;
+    }
+
+    // ACP-only commands
+    if (this.config.mode === "acp") {
+      if (cmd === "/show-thoughts" || cmd === "/thoughts") {
+        const enabled = this.acpSessions!.toggleShowThoughts(userId);
+        await this.sdk.sendText(
+          userId,
+          enabled ? "Thoughts enabled." : "Thoughts disabled.",
+          contextToken
+        );
+        return true;
+      }
+    }
+
+    // API-only commands
+    if (this.config.mode === "api") {
+      if (this.sessions!.isResetCommand(lower)) {
+        this.sessions!.resetSession(userId);
+        await this.sdk.sendText(
+          userId,
+          "Conversation has been reset.",
+          contextToken
+        );
+        return true;
+      }
+    }
+
+    // /help
+    if (cmd === "/help") {
+      const lines = ["Commands:"];
+      if (this.config.mode === "acp") {
+        lines.push("/show-thoughts — Toggle thinking visibility");
+      }
+      if (this.config.mode === "api") {
+        lines.push("/reset — Clear conversation history");
+      }
+      lines.push("/model [name] — View/switch model (sonnet/haiku/opus)");
+      lines.push("/debug [on|off] — Toggle debug mode");
+      lines.push("/help — Show this message");
+      await this.sdk.sendText(userId, lines.join("\n"), contextToken);
+      return true;
+    }
+
+    return false;
+  }
+
   // -- API mode --
 
   private async processApiMessage(msg: WeixinMessage): Promise<void> {
@@ -228,40 +329,14 @@ export class WeChatClaudeBridge {
     if (!userId || !contextToken) return;
 
     try {
-      // Check for commands
       const firstTextItem = msg.item_list?.find((item) => item.type === 1);
       if (firstTextItem?.text_item?.text) {
-        const text = firstTextItem.text_item.text.trim();
-        const textLower = text.toLowerCase();
-
-        if (this.sessions!.isResetCommand(textLower)) {
-          this.sessions!.resetSession(userId);
-          await this.sdk.sendText(
-            userId,
-            "Conversation has been reset.",
-            contextToken
-          );
-          return;
-        }
-
-        if (textLower === "/debug") {
-          this.debug = !this.debug;
-          await this.sdk.sendText(
-            userId,
-            this.debug ? "Debug mode ON." : "Debug mode OFF.",
-            contextToken
-          );
-          return;
-        }
-
-        if (textLower === "/help") {
-          await this.sdk.sendText(
-            userId,
-            "Commands:\n/reset — Clear history\n/debug — Toggle debug\n/help — Help",
-            contextToken
-          );
-          return;
-        }
+        const handled = await this.handleCommand(
+          userId,
+          contextToken,
+          firstTextItem.text_item.text
+        );
+        if (handled) return;
       }
 
       // Send typing indicator
@@ -314,36 +389,12 @@ export class WeChatClaudeBridge {
     // Handle chat commands
     const firstTextItem = msg.item_list?.find((item) => item.type === 1);
     if (firstTextItem?.text_item?.text) {
-      const text = firstTextItem.text_item.text.trim().toLowerCase();
-
-      if (text === "/show-thoughts" || text === "/thoughts") {
-        const enabled = this.acpSessions!.toggleShowThoughts(userId);
-        await this.sdk.sendText(
-          userId,
-          enabled ? "Thoughts enabled." : "Thoughts disabled.",
-          contextToken
-        );
-        return;
-      }
-
-      if (text === "/debug") {
-        this.debug = !this.debug;
-        await this.sdk.sendText(
-          userId,
-          this.debug ? "Debug mode ON." : "Debug mode OFF.",
-          contextToken
-        );
-        return;
-      }
-
-      if (text === "/help") {
-        await this.sdk.sendText(
-          userId,
-          "Commands:\n/show-thoughts — Toggle thinking\n/debug — Toggle debug\n/help — Help",
-          contextToken
-        );
-        return;
-      }
+      const handled = await this.handleCommand(
+        userId,
+        contextToken,
+        firstTextItem.text_item.text
+      );
+      if (handled) return;
     }
 
     try {

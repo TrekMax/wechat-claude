@@ -117,6 +117,24 @@ export class AcpSessionManager {
     return newValue;
   }
 
+  /** Get current model for this manager */
+  getModel(): string {
+    return this.opts.agentEnv?.CLAUDE_CODE_USE_MODEL || "default";
+  }
+
+  /** Switch model — kills existing session so next message spawns with new model */
+  setModel(userId: string, model: string): void {
+    this.opts.agentEnv = { ...this.opts.agentEnv, CLAUDE_CODE_USE_MODEL: model };
+
+    // Kill existing session so it restarts with new model
+    const session = this.sessions.get(userId);
+    if (session) {
+      killAgent(session.agentInfo.process);
+      this.sessions.delete(userId);
+      this.opts.log(`Session for ${userId} killed for model switch to ${model}`);
+    }
+  }
+
   private async createSession(
     userId: string,
     contextToken: string
