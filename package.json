@@ -8,8 +8,17 @@
   "bin": {
     "wechat-claude": "dist/bin/wechat-claude.js"
   },
+  "files": [
+    "dist",
+    "templates",
+    ".env.example",
+    "README.md",
+    "README.zh-CN.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
