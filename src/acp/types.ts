@@ -23,6 +23,12 @@ export const BUILT_IN_AGENTS: Record<string, AgentPreset> = {
     command: "npx",
     args: ["@google/gemini-cli", "--experimental-acp"],
   },
+  codex: {
+    label: "OpenAI Codex",
+    command: "npx",
+    args: ["@zed-industries/codex-acp"],
+    description: "OpenAI Codex CLI via ACP (requires OPENAI_API_KEY)",
+  },
 };
 
 export function resolveAgent(
