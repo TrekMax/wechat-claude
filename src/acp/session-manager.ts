@@ -35,6 +35,7 @@ export interface AcpSessionManagerOpts {
   /** Send text without image scanning (for progress/thoughts) */
   onProgress: (userId: string, contextToken: string, text: string) => Promise<void>;
   onImageReceived: (userId: string, contextToken: string, data: Buffer, mimeType: string) => Promise<void>;
+  onFileReceived: (userId: string, contextToken: string, data: Buffer, fileName: string, mimeType: string) => Promise<void>;
   sendTyping: (userId: string, contextToken: string) => Promise<void>;
 }
 
@@ -348,6 +349,7 @@ export class AcpSessionManager {
       onThoughtFlush: (text) => this.opts.onProgress(userId, contextToken, text),
       onToolProgress: (text) => this.opts.onProgress(userId, contextToken, text),
       onImageReceived: (data, mimeType) => this.opts.onImageReceived(userId, contextToken, data, mimeType),
+      onFileReceived: (data, fileName, mimeType) => this.opts.onFileReceived(userId, contextToken, data, fileName, mimeType),
       showThoughts: this.opts.showThoughts,
     });
 
@@ -406,6 +408,8 @@ export class AcpSessionManager {
             this.opts.onProgress(userId, pending.contextToken, text),
           onImageReceived: (data, mimeType) =>
             this.opts.onImageReceived(userId, pending.contextToken, data, mimeType),
+          onFileReceived: (data, fileName, mimeType) =>
+            this.opts.onFileReceived(userId, pending.contextToken, data, fileName, mimeType),
         });
 
         // Reset chunks for the new turn

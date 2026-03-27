@@ -13,6 +13,7 @@ export interface AcpClientOpts {
   onThoughtFlush: (text: string) => Promise<void>;
   onToolProgress: (text: string) => Promise<void>;
   onImageReceived: (data: Buffer, mimeType: string) => Promise<void>;
+  onFileReceived: (data: Buffer, fileName: string, mimeType: string) => Promise<void>;
   showThoughts: boolean;
 }
 
@@ -39,6 +40,7 @@ export class AcpClient implements acp.Client {
     onThoughtFlush: (text: string) => Promise<void>;
     onToolProgress: (text: string) => Promise<void>;
     onImageReceived: (data: Buffer, mimeType: string) => Promise<void>;
+    onFileReceived: (data: Buffer, fileName: string, mimeType: string) => Promise<void>;
   }): void {
     this.opts = { ...this.opts, ...callbacks };
   }
@@ -99,6 +101,16 @@ export class AcpClient implements acp.Client {
               buffer,
               content.mimeType ?? "image/png"
             );
+          } catch {
+            // best effort
+          }
+        } else if (content.type === "file" && content.data) {
+          const fileName = (content as Record<string, unknown>).fileName as string | undefined;
+          const mimeType = content.mimeType ?? "application/octet-stream";
+          tslog("acp", `Received file chunk: ${fileName ?? "unknown"} (${mimeType})`);
+          const buffer = Buffer.from(content.data, "base64");
+          try {
+            await this.opts.onFileReceived(buffer, fileName ?? "file", mimeType);
           } catch {
             // best effort
           }

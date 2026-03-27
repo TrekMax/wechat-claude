@@ -104,6 +104,8 @@ export class WeChatClaudeBridge {
           this.sendProgressText(userId, contextToken, text),
         onImageReceived: (userId, contextToken, data, mimeType) =>
           this.sendImage(userId, contextToken, data, mimeType),
+        onFileReceived: (userId, contextToken, data, fileName, mimeType) =>
+          this.sendFileBuffer(userId, contextToken, data, fileName, mimeType),
         sendTyping: (userId, contextToken) =>
           this.sendTypingIndicator(userId, contextToken),
       });
@@ -666,8 +668,8 @@ export class WeChatClaudeBridge {
       log("debug", `===== End reply (${text.length} chars) =====`);
     }
 
-    // Detect and send local image/media files (deduplicated)
-    const mediaPaths = this.extractImagePaths(text);
+    // Detect and send local files (images, videos, documents) (deduplicated)
+    const mediaPaths = this.extractFilePaths(text);
     if (mediaPaths.length > 0) {
       const sent = this.sentFiles.get(userId) ?? new Set<string>();
       for (const filePath of mediaPaths) {
@@ -686,25 +688,34 @@ export class WeChatClaudeBridge {
     }
   }
 
-  private static readonly IMAGE_EXTENSIONS = new Set([
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
-  ]);
-
   private static readonly MEDIA_EXTENSIONS: Record<string, number> = {
-    // Images
+    // Images (mediaType=1)
     ".png": 1, ".jpg": 1, ".jpeg": 1, ".gif": 1, ".webp": 1, ".bmp": 1,
-    // Videos
-    ".mp4": 2, ".mov": 2, ".avi": 2, ".mkv": 2,
-    // Files (everything else)
+    // Videos (mediaType=2)
+    ".mp4": 2, ".mov": 2, ".avi": 2, ".mkv": 2, ".webm": 2,
+    // Files (mediaType=3)
+    ".pdf": 3, ".doc": 3, ".docx": 3, ".xls": 3, ".xlsx": 3,
+    ".ppt": 3, ".pptx": 3, ".txt": 3, ".csv": 3, ".json": 3,
+    ".xml": 3, ".yaml": 3, ".yml": 3, ".toml": 3, ".md": 3,
+    ".zip": 3, ".tar": 3, ".gz": 3, ".rar": 3, ".7z": 3,
+    ".js": 3, ".ts": 3, ".py": 3, ".go": 3, ".rs": 3,
+    ".c": 3, ".cpp": 3, ".h": 3, ".java": 3, ".sh": 3,
+    ".html": 3, ".css": 3, ".svg": 3, ".log": 3,
   };
 
   /**
-   * Extract local file paths pointing to images/media from agent reply text.
-   * Looks for absolute paths like /Users/xxx/file.png
+   * Extract local file paths pointing to images/media/documents from agent reply text.
+   * Looks for absolute paths like /Users/xxx/file.png or /home/xxx/report.pdf
    */
-  private extractImagePaths(text: string): string[] {
-    // Match absolute paths with known media extensions
-    const pathPattern = /(\/[^\s`"'<>|*?\n]+\.(?:png|jpg|jpeg|gif|webp|bmp|mp4|mov))/gi;
+  private extractFilePaths(text: string): string[] {
+    // Build extension list from MEDIA_EXTENSIONS keys
+    const exts = Object.keys(WeChatClaudeBridge.MEDIA_EXTENSIONS)
+      .map((e) => e.slice(1)) // remove leading dot
+      .join("|");
+    const pathPattern = new RegExp(
+      `(\\/[^\\s\`"'<>|*?\\n]+\\.(?:${exts}))`,
+      "gi"
+    );
     const matches = text.match(pathPattern) || [];
 
     // Deduplicate and filter to existing files
@@ -746,6 +757,54 @@ export class WeChatClaudeBridge {
         "bridge",
         `Failed to send file ${filePath}: ${error instanceof Error ? error.message : error}`
       );
+    }
+  }
+
+  private async sendFileBuffer(
+    userId: string,
+    contextToken: string,
+    data: Buffer,
+    fileName: string,
+    mimeType: string
+  ): Promise<void> {
+    const tempDir = join(tmpdir(), "wechat-claude-files");
+    mkdirSync(tempDir, { recursive: true });
+    const safeName = fileName.replace(/[/\\]/g, "_") || `file_${Date.now()}`;
+    const tempPath = join(tempDir, safeName);
+
+    try {
+      writeFileSync(tempPath, data);
+      log("bridge", `Sending file to ${userId}: ${fileName} (${data.length} bytes, ${mimeType})`);
+
+      // Determine media type from extension
+      const ext = extname(fileName).toLowerCase();
+      const mediaType = WeChatClaudeBridge.MEDIA_EXTENSIONS[ext] ?? 3; // default FILE
+
+      await this.sdk.messaging.sender.sendMedia({
+        to: userId,
+        filePath: tempPath,
+        mediaType,
+        fileName: safeName,
+        contextToken,
+      });
+
+      log("bridge", `File sent to ${userId}: ${fileName}`);
+    } catch (error) {
+      logError(
+        "bridge",
+        `Failed to send file ${fileName}: ${error instanceof Error ? error.message : error}`
+      );
+      await this.sdk.sendText(
+        userId,
+        `[File generated but failed to send: ${fileName}]`,
+        contextToken
+      );
+    } finally {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // best effort
+      }
     }
   }
 
