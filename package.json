@@ -16,7 +16,7 @@
     "README.zh-CN.md"
   ],
   "scripts": {
-    "build": "npx tsc",
+    "build": "node ./node_modules/typescript/bin/tsc",
     "prepublishOnly": "npm run build",
     "prepare": "npm run build",
     "test": "vitest run",
