@@ -27,20 +27,22 @@
 
 ## 安装
 
+### 从 npm 安装（推荐）
+
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/anthropics/wechat-claude.git
+npm install -g wechat-claude
+```
+
+### 从源码安装
+
+```bash
+git clone https://github.com/TrekMax/wechat-claude.git
 cd wechat-claude
-
-# 2. 安装依赖
 npm install
-
-# 3. 复制环境变量模板并填入你的密钥
-cp .env.example .env
-# 编辑 .env，设置 ANTHROPIC_API_KEY（API 模式需要）
-
-# 4. 构建（可选，用于生产环境）
 npm run build
+
+# 复制环境变量模板并填入你的密钥
+cp .env.example .env
 ```
 
 ## 快速开始

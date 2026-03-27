@@ -29,20 +29,22 @@ WeChat-to-Claude bridge via iLink protocol. Send messages to your WeChat bot, ge
 
 ## Installation
 
+### From npm (recommended)
+
 ```bash
-# 1. Clone the repository
-git clone https://github.com/anthropics/wechat-claude.git
+npm install -g wechat-claude
+```
+
+### From source
+
+```bash
+git clone https://github.com/TrekMax/wechat-claude.git
 cd wechat-claude
-
-# 2. Install dependencies
 npm install
-
-# 3. Copy environment template and fill in your keys
-cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY (for API mode)
-
-# 4. Build (optional, for production use)
 npm run build
+
+# Copy environment template and fill in your keys
+cp .env.example .env
 ```
 
 ## Quick Start
