@@ -16,9 +16,8 @@
     "README.zh-CN.md"
   ],
   "scripts": {
-    "build": "node ./node_modules/typescript/bin/tsc",
+    "build": "tsc",
     "prepublishOnly": "npm run build",
-    "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -40,12 +39,12 @@
     "@agentclientprotocol/sdk": "^0.17.0",
     "@anthropic-ai/sdk": "^0.39.0",
     "@xmccln/wechat-ilink-sdk": "^1.0.2",
-    "qrcode-terminal": "^0.12.0",
-    "typescript": "^5.8.0"
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
     "vitest": "^3.1.0"
   }
 }
